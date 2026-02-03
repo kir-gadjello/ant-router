@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::logging::log_request;
 use crate::protocol::*;
 use crate::transformer::{convert_request, convert_response, convert_stream};
 use axum::{
@@ -15,7 +16,7 @@ use reqwest::Client;
 use serde_json::{json, Value};
 use std::env;
 use std::sync::Arc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 pub struct AppState {
     pub config: Config,
@@ -34,6 +35,20 @@ pub async fn handle_messages(
     Json(payload): Json<AnthropicMessageRequest>,
 ) -> impl IntoResponse {
     let _start = std::time::Instant::now();
+
+    // 0. Logging
+    if state.config.log_enabled {
+        let log_path = state.config.get_log_path();
+        // Log asynchronously/non-blocking ideally, but for now blocking IO is simple and acceptable for this task
+        // as per "I trust your engineering intuition".
+        // To be strictly async, we'd spawn_blocking.
+        let payload_clone = payload.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Err(e) = log_request(&payload_clone, &log_path) {
+                warn!("Failed to log request: {}", e);
+            }
+        });
+    }
 
     // 1. Detect Vision Requirements
     let has_images = payload.messages.iter().any(|m| match &m.content {
@@ -64,16 +79,8 @@ pub async fn handle_messages(
         }
     } else {
         // Standard resolution logic
-        // If the requested model exists in our config, use it directly (alias or key)
-        // Otherwise, fall back to the legacy "profile/rule" resolution which returns a wire ID string.
-
-        // Wait, `resolve_model` currently returns a String (wire ID).
-        // We need to bridge the new config system with the old one.
-        // If we find a UMCP model, use its ID.
-        // If not, use legacy resolution.
-
         if let Some(_model_conf) = state.config.resolve_model_alias(&payload.model) {
-            // It's a UMCP model, we'll process it later
+            // It's a UMCP model
             &payload.model
         } else {
             // It might be a pattern match from legacy profiles, or just pass-through
@@ -115,25 +122,8 @@ pub async fn handle_messages(
         }
     };
 
-    // Apply UMCP API Params (Extra Body)
-    if let Some(_params) = &api_params {
-        // Merge extra_body into request.
-        // OpenAIChatCompletionRequest doesn't have a catch-all field easily accessible for serde serialization
-        // unless we use a custom serializer or serialize to Value first.
-        // Let's serialize to Value, merge, then we can send that.
-        // Note: reqwest .json() takes any Serialize.
-        // So we can just merge into a Value.
-    }
-
     // 5. Prepare Upstream Request
     let url = format!("{}/v1/chat/completions", state.base_url);
-
-    // Determine Auth (Provider specific or Global)
-    // In UMCP, models have providers. We should ideally resolve the provider config.
-    // For now, we stick to the global client/auth unless overridden?
-    // The spec says "Providers: Abstract the connection details".
-    // We haven't implemented full provider resolution in the client construction yet (Client is global).
-    // We will stick to global auth for this iteration unless `api_key` is overridden in params (not spec'd).
 
     let mut req_builder = state.client.post(&url);
 

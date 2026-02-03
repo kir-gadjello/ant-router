@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::env;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tracing::{debug, warn};
 
 // ==================================================================================
@@ -36,6 +36,15 @@ pub struct Config {
     // These act as specific overrides/pointers for logic handlers
     pub ant_vision_model: Option<String>,
     pub ant_vision_reasoning_model: Option<String>,
+
+    // Logging Configuration
+    #[serde(default = "default_log_enabled")]
+    pub log_enabled: bool,
+    pub log_file: Option<String>,
+}
+
+fn default_log_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -126,7 +135,21 @@ pub struct ApiParams {
 
 impl Config {
     pub async fn load(path: &str) -> Result<Self> {
-        let config_path = Path::new(path);
+        let mut config_path = PathBuf::from(path);
+
+        // Fallback check: $HOME/.ant-router/config.yaml
+        if !config_path.exists() {
+            if let Ok(home) = env::var("HOME") {
+                let fallback_path = Path::new(&home).join(".ant-router").join("config.yaml");
+                if fallback_path.exists() {
+                    debug!(
+                        "Config not found at {:?}, using fallback at {:?}",
+                        config_path, fallback_path
+                    );
+                    config_path = fallback_path;
+                }
+            }
+        }
 
         if !config_path.exists() {
             warn!("Config file not found at {:?}, using defaults", config_path);
@@ -138,10 +161,12 @@ impl Config {
                 models: HashMap::new(),
                 ant_vision_model: None,
                 ant_vision_reasoning_model: None,
+                log_enabled: true,
+                log_file: None,
             });
         }
 
-        let content = tokio::fs::read_to_string(config_path)
+        let content = tokio::fs::read_to_string(&config_path)
             .await
             .context("Failed to read config file")?;
 
@@ -152,6 +177,19 @@ impl Config {
         config.resolve_models()?;
 
         Ok(config)
+    }
+
+    pub fn get_log_path(&self) -> PathBuf {
+        if let Some(path_str) = &self.log_file {
+            PathBuf::from(path_str)
+        } else if let Ok(home) = env::var("HOME") {
+            Path::new(&home)
+                .join(".ant-router")
+                .join("logs")
+                .join(".log.jsonl")
+        } else {
+            PathBuf::from(".ant-router/logs/.log.jsonl")
+        }
     }
 
     fn resolve_models(&mut self) -> Result<()> {
@@ -464,6 +502,8 @@ impl Default for Config {
             models: HashMap::new(),
             ant_vision_model: None,
             ant_vision_reasoning_model: None,
+            log_enabled: true,
+            log_file: None,
         }
     }
 }
