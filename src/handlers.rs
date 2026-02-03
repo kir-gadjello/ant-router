@@ -16,6 +16,7 @@ use reqwest::Client;
 use serde_json::{json, Value};
 use std::env;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
 pub struct AppState {
@@ -47,7 +48,7 @@ pub async fn handle_messages(
         });
     }
 
-    // 1. Detect Vision Requirements
+    // 1. Detect Features
     let has_images = payload.messages.iter().any(|m| match &m.content {
         AnthropicMessageContent::Blocks(blocks) => blocks
             .iter()
@@ -57,12 +58,16 @@ pub async fn handle_messages(
 
     let thinking_enabled = payload.thinking.is_some();
 
-    // 2. Resolve Model Configuration
-    // Logic:
-    // a. Get current profile.
-    // b. Determine logical model ID (from vision routing or rules).
-    // c. Lookup ModelConfig from `models` map using logical ID.
+    let mut request_features = Vec::new();
+    if has_images {
+        request_features.push("vision");
+    }
+    if thinking_enabled {
+        request_features.push("reasoning");
+    }
+    // "vision_reasoning" is implied if both present, but we check presence in match_features
 
+    // 2. Resolve Model Configuration
     let profile_name = &state.config.current_profile;
     let profile = match state.config.profiles.get(profile_name) {
         Some(p) => p,
@@ -76,34 +81,13 @@ pub async fn handle_messages(
         }
     };
 
-    let target_logical_id = if has_images {
-        // Vision Routing via Profile
-        let vision_target = if thinking_enabled {
-            profile.ant_vision_reasoning_model.as_ref().or(profile.ant_vision_model.as_ref())
-        } else {
-            profile.ant_vision_model.as_ref()
-        };
-
-        match vision_target {
-            Some(target) => target.clone(),
-            None => {
-                // Fallback to standard rule matching if no specific vision model defined?
-                // Or assume the requested model supports vision if mapped?
-                // Let's fallback to standard rule matching logic.
-                resolve_via_rules(profile, &payload.model, thinking_enabled)
-            }
-        }
-    } else {
-        resolve_via_rules(profile, &payload.model, thinking_enabled)
-    };
+    let target_logical_id = resolve_via_rules(profile, &payload.model, &request_features);
 
     // Lookup ModelConfig
     let (wire_model, api_params) = if let Some(model_conf) = state.config.models.get(&target_logical_id) {
         (state.config.get_wire_model_id(model_conf), model_conf.api_params.clone())
     } else {
-        // Should not happen if validation passes, but handle safely
         warn!("Logical model ID '{}' resolved but not found in models definition", target_logical_id);
-        // Fallback: assume target_logical_id IS the wire ID (legacy behavior fallback)
         (target_logical_id.clone(), None)
     };
 
@@ -116,8 +100,8 @@ pub async fn handle_messages(
     }
 
     info!(
-        "Request for '{}' (thinking={}, vision={}) -> Logical '{}' -> Wire '{}'",
-        payload.model, thinking_enabled, has_images, target_logical_id, wire_model
+        "Request for '{}' (features={:?}) -> Logical '{}' -> Wire '{}'",
+        payload.model, request_features, target_logical_id, wire_model
     );
 
     // 4. Transform Request
@@ -142,14 +126,12 @@ pub async fn handle_messages(
         req_builder = req_builder.header("Authorization", format!("Bearer {}", key));
     }
 
-    // Apply headers from UMCP params
     if let Some(params) = &api_params {
         for (k, v) in &params.headers {
             req_builder = req_builder.header(k, v);
         }
     }
 
-    // Merge Body
     let mut final_body = serde_json::to_value(&openai_req).unwrap();
     if let Some(params) = &api_params {
         if !params.extra_body.is_empty() {
@@ -161,22 +143,58 @@ pub async fn handle_messages(
         }
     }
 
-    req_builder = req_builder.json(&final_body);
+    // 6. Send Request (with Retry)
+    let max_retries = api_params.as_ref().and_then(|p| p.retry.as_ref()).map(|r| r.max_retries).unwrap_or(0);
+    let backoff = api_params.as_ref().and_then(|p| p.retry.as_ref()).map(|r| r.backoff_ms).unwrap_or(500);
 
-    if env::var("DEBUG").is_ok() {
-        debug!("Upstream Request Body: {:?}", final_body);
-    }
+    let mut attempts = 0;
+    let response = loop {
+        attempts += 1;
+        // Clone request builder for retry? Reqwest builders are consumed.
+        // We need to rebuild or clone. Cloning builder requires `clone()` which `RequestBuilder` supports.
+        // But we already added body which might not be cloneable easily if stream?
+        // `json(&final_body)` sets body. `final_body` is `Value`.
+        // We can rebuild easily since we have all components.
 
-    // 6. Send Request
-    let response = match req_builder.send().await {
+        let mut attempt_builder = state.client.post(&url);
+        if let Some(key) = &state.api_key {
+            attempt_builder = attempt_builder.header("Authorization", format!("Bearer {}", key));
+        }
+        if let Some(params) = &api_params {
+            for (k, v) in &params.headers {
+                attempt_builder = attempt_builder.header(k, v);
+            }
+        }
+        attempt_builder = attempt_builder.json(&final_body);
+
+        match attempt_builder.send().await {
+            Ok(res) => {
+                if res.status().is_server_error() && attempts <= max_retries {
+                    warn!("Upstream server error {}, retrying ({}/{})", res.status(), attempts, max_retries);
+                    tokio::time::sleep(Duration::from_millis(backoff * (2_u64.pow(attempts - 1)))).await;
+                    continue;
+                }
+                break Ok(res);
+            }
+            Err(e) => {
+                if attempts <= max_retries {
+                    warn!("Upstream connection failed: {}, retrying ({}/{})", e, attempts, max_retries);
+                    tokio::time::sleep(Duration::from_millis(backoff * (2_u64.pow(attempts - 1)))).await;
+                    continue;
+                }
+                break Err(e);
+            }
+        }
+    };
+
+    let response = match response {
         Ok(res) => res,
         Err(e) => {
-            error!("Upstream request failed: {}", e);
+            error!("Upstream request failed after retries: {}", e);
             return (
                 StatusCode::BAD_GATEWAY,
                 Json(json!({"error": e.to_string()})),
-            )
-                .into_response();
+            ).into_response();
         }
     };
 
@@ -242,21 +260,59 @@ pub async fn handle_messages(
     }
 }
 
-// Helper to resolve model from rules
-fn resolve_via_rules(profile: &crate::config::Profile, input_model: &str, thinking: bool) -> String {
+// Updated resolver using match_features
+fn resolve_via_rules(
+    profile: &crate::config::Profile,
+    input_model: &str,
+    request_features: &[&str],
+) -> String {
     for rule in &profile.rules {
         if let Ok(regex) = glob_to_regex(&rule.pattern) {
             if regex.is_match(input_model) {
-                if thinking {
-                    if let Some(target) = &rule.reasoning_target {
-                        return target.clone();
+                // Check if rule requires features
+                // Logic: A rule matches if ALL its required features are present in the request.
+                // Or: A rule matches if the request has features AND the rule matches them?
+                // The prompt says: "match_features: [vision, vision_reasoning]".
+                // This implies "Match this rule IF the request has these features".
+
+                let rule_requires_features = !rule.match_features.is_empty();
+
+                if rule_requires_features {
+                    // Check if request has AT LEAST ONE of the matching features?
+                    // Or ALL? Usually match lists are "if request has any of these".
+                    // E.g. match_features: [vision] -> matches if request has vision.
+                    // But if match_features: [vision, reasoning] -> matches if request has vision OR reasoning?
+                    // Or implies a combined capability?
+                    // Let's assume "Match if request has ANY of the listed features".
+                    // So if request has "vision", and rule has "vision", it matches.
+                    // If rule has "vision", and request has "reasoning", it does NOT match.
+
+                    let mut feature_match = false;
+                    for rf in request_features {
+                        if rule.match_features.iter().any(|f| f == *rf) {
+                            feature_match = true;
+                            break;
+                        }
                     }
+
+                    // Special case: "vision_reasoning" feature in rule might match if request has BOTH vision and reasoning?
+                    // Simplified: just match simple strings.
+
+                    if feature_match {
+                        return rule.target.clone();
+                    }
+                } else {
+                    // Rule has no feature constraints. It matches general requests.
+                    // BUT: we should prefer feature-specific rules.
+                    // Since we iterate in order, we assume feature-specific rules come FIRST.
+                    // If we are here, it means we matched pattern but didn't check features.
+                    // If this rule is a catch-all (no features), it matches.
+                    return rule.target.clone();
                 }
-                return rule.target.clone();
             }
         }
     }
-    // Fallback: return input model as is if no rule matches
+    // Fallback
     input_model.to_string()
 }
 

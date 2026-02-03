@@ -57,6 +57,9 @@ models:
       extra_body:
         stream_options:
           include_usage: true
+      retry:
+        max_retries: 3
+        backoff_ms: 500
 
   # --- Concrete Models ---
 
@@ -72,17 +75,12 @@ models:
     api_model_id: "google/gemini-2.0-pro-exp-02-05:free"
     aliases: ["gemini-2.0-pro"]
 
-  # Vision Models (for Profile Mapping)
-  "gpt-4o":
+  # Vision Models (Z-AI GLM)
+  "glm-4d6-v":
     extends: _base_openrouter
-    api_model_id: "openai/gpt-4o"
+    api_model_id: "z-ai/glm-4.6v"
     capabilities:
       vision: true
-
-  "o1":
-    extends: _base_openrouter
-    api_model_id: "openai/o1"
-    capabilities:
       reasoning: true
 
 # ----------------------------------------------------------------------------------
@@ -90,23 +88,25 @@ models:
 # ----------------------------------------------------------------------------------
 # Profiles define mapping rules.
 # - pattern: Regex/Glob to match input model ID.
+# - match_features: List of required features in request (vision, reasoning)
 # - target: Key in `models` map (Logical Model ID).
-# - reasoning_target: Optional override for thinking requests.
-# - ant_vision_model: Optional model for vision requests.
-# - ant_vision_reasoning_model: Optional model for vision + thinking requests.
 
 profiles:
-  # Profile: Stepfun Flash (Free)
+  # Profile: Stepfun Flash (Free) with GLM vision fallback
   stepfun:
     rules:
+      # If request needs vision (or vision+reasoning), route to GLM
+      - pattern: ".*"
+        match_features: ["vision"]
+        target: "glm-4d6-v"
+
+      # Default catch-all
       - pattern: ".*"
         target: "stepfun-flash"
-        reasoning_target: "stepfun-flash"
-    ant_vision_model: "gpt-4o"
+        # Optional: reasoning_target: "stepfun-flash"
 
   # Profile: Maps everything to Google's Gemini 2.0 Pro (Free)
   gemini_free:
     rules:
       - pattern: ".*"
         target: "gemini-pro-exp"
-    ant_vision_model: "gpt-4o"
