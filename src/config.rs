@@ -201,7 +201,10 @@ impl Config {
             return Some(m);
         }
         // 2. Alias search
-        self.models.values().find(|&m| m.aliases.contains(&alias.to_string())).map(|v| v as _)
+        self.models
+            .values()
+            .find(|&m| m.aliases.contains(&alias.to_string()))
+            .map(|v| v as _)
     }
 
     // Helper to get wire model ID from a resolved config
