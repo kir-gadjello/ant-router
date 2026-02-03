@@ -25,11 +25,13 @@ async fn main() -> Result<()> {
 
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
-    // 2. Configuration & Args
+    // 2. Configuration Loading
     let args: Vec<String> = env::args().collect();
     let mut config_path = "./config.yaml".to_string();
-    let mut port = 3000;
-    let mut host = "0.0.0.0".to_string();
+
+    // CLI Args parsing
+    let mut cli_port = None;
+    let mut cli_host = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -43,14 +45,14 @@ async fn main() -> Result<()> {
             "--port" => {
                 if i + 1 < args.len() {
                     if let Ok(p) = args[i + 1].parse() {
-                        port = p;
+                        cli_port = Some(p);
                     }
                     i += 1;
                 }
             }
             "--host" => {
                 if i + 1 < args.len() {
-                    host = args[i + 1].clone();
+                    cli_host = Some(args[i + 1].clone());
                     i += 1;
                 }
             }
@@ -61,14 +63,6 @@ async fn main() -> Result<()> {
 
     if let Ok(p) = env::var("CONFIG_PATH") {
         config_path = p;
-    }
-    if let Ok(p) = env::var("PORT") {
-        if let Ok(p_parsed) = p.parse() {
-            port = p_parsed;
-        }
-    }
-    if let Ok(h) = env::var("HOST") {
-        host = h;
     }
 
     info!("Loading config from {}", config_path);
@@ -85,17 +79,65 @@ async fn main() -> Result<()> {
         }
     }
 
-    // 3. Auth & Upstream
-    let base_url = env::var("ANTHROPIC_PROXY_BASE_URL")
-        .unwrap_or_else(|_| "https://openrouter.ai/api".to_string());
+    // 3. Resolve Server Settings (Precedence: Env > CLI > Config > Default)
+    let mut port = 3000;
+    if let Some(p) = config.server.port {
+        port = p;
+    }
+    if let Some(p) = cli_port {
+        port = p;
+    }
+    if let Ok(p) = env::var("PORT") {
+        if let Ok(p_parsed) = p.parse() {
+            port = p_parsed;
+        }
+    }
 
-    let custom_url_set = env::var("ANTHROPIC_PROXY_BASE_URL").is_ok();
+    let mut host = "0.0.0.0".to_string();
+    if let Some(h) = &config.server.host {
+        host = h.clone();
+    }
+    if let Some(h) = cli_host {
+        host = h;
+    }
+    if let Ok(h) = env::var("HOST") {
+        host = h;
+    }
 
-    let api_key = if !custom_url_set {
-        Some(
-            env::var("OPENROUTER_API_KEY")
-                .expect("OPENROUTER_API_KEY required when using default OpenRouter endpoint"),
-        )
+    // 4. Resolve Upstream Settings
+    // Base URL
+    let mut base_url = "https://openrouter.ai/api".to_string();
+    if let Some(url) = &config.upstream.base_url {
+        base_url = url.clone();
+    }
+    if let Ok(url) = env::var("ANTHROPIC_PROXY_BASE_URL") {
+        base_url = url;
+    }
+
+    // API Key
+    // Logic: If custom URL set via Env, maybe skip key?
+    // Spec logic was: "If ANTHROPIC_PROXY_BASE_URL is set, no API key required... Otherwise requires OPENROUTER_API_KEY"
+    // We should try to respect that but also support the new config.
+
+    let env_url_set = env::var("ANTHROPIC_PROXY_BASE_URL").is_ok();
+
+    let api_key_var_name = config.upstream.api_key_env_var.as_deref().unwrap_or("OPENROUTER_API_KEY");
+
+    let api_key = if !env_url_set {
+        // Try to load key from the specified env var
+        match env::var(api_key_var_name) {
+            Ok(k) => Some(k),
+            Err(_) => {
+                // If using default OpenRouter, key is required.
+                // However, user might be relying on legacy behavior or custom config.
+                // Let's log warning and return None, potentially failing upstream if auth is needed.
+                // Or panic if strict. Spec said "Otherwise requires OPENROUTER_API_KEY".
+                if base_url.contains("openrouter.ai") {
+                     panic!("{} required when using default OpenRouter endpoint", api_key_var_name);
+                }
+                None
+            }
+        }
     } else {
         None
     };
@@ -112,10 +154,10 @@ async fn main() -> Result<()> {
         api_key,
     });
 
-    // 4. Router
+    // 5. Router
     let app = create_router(state);
 
-    // 5. Server
+    // 6. Server
     let addr: SocketAddr = format!("{}:{}", host, port).parse()?;
     info!("Listening on {}", addr);
 
