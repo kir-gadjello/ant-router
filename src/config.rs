@@ -16,7 +16,6 @@ pub struct Config {
     #[serde(default)]
     pub current_profile: String,
 
-    // Core feature: Profiles map to Models
     #[serde(default)]
     pub profiles: HashMap<String, Profile>,
 
@@ -27,7 +26,6 @@ pub struct Config {
     #[serde(default)]
     pub models: HashMap<String, ModelConfig>,
 
-    // Config flags
     #[serde(default = "default_log_enabled")]
     pub log_enabled: bool,
     pub log_file: Option<String>,
@@ -59,19 +57,22 @@ pub struct UpstreamConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct Profile {
     pub rules: Vec<Rule>,
-    // Profile-specific vision routing
-    pub ant_vision_model: Option<String>,
-    pub ant_vision_reasoning_model: Option<String>,
+    // Removed old vision routing fields
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Rule {
     pub pattern: String,
+    // match_features replaces reasoning_target and ant_vision fields
+    #[serde(default)]
+    pub match_features: Vec<String>, // e.g. ["vision", "reasoning"]
     pub target: String,
+    // Keep reasoning_target as optional fallback/shorthand if needed, but per prompt we prefer match_features logic
+    // Prompt: "if no reasoning_target is defined use same model as target... functionality now should be handled by match_features"
+    // So we can remove reasoning_target OR keep it for legacy compat.
+    // I'll keep it deprecated/optional but primary logic uses match_features.
     pub reasoning_target: Option<String>,
 }
-
-// --- UMCP Structs ---
 
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct Defaults {
@@ -143,6 +144,14 @@ pub struct ApiParams {
     pub headers: HashMap<String, String>,
     #[serde(default)]
     pub extra_body: HashMap<String, Value>,
+    // Added retry config
+    pub retry: Option<RetryConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone, Serialize)]
+pub struct RetryConfig {
+    pub max_retries: u32,
+    pub backoff_ms: u64,
 }
 
 impl Config {
@@ -153,10 +162,6 @@ impl Config {
             if let Ok(home) = env::var("HOME") {
                 let fallback_path = Path::new(&home).join(".ant-router").join("config.yaml");
                 if fallback_path.exists() {
-                    debug!(
-                        "Config not found at {:?}, using fallback at {:?}",
-                        config_path, fallback_path
-                    );
                     config_path = fallback_path;
                 }
             }
@@ -227,7 +232,6 @@ impl Config {
     }
 
     fn validate(&self) -> Result<()> {
-        // Validate that all profile targets map to existing models
         for (profile_name, profile) in &self.profiles {
             for rule in &profile.rules {
                 if !self.models.contains_key(&rule.target) {
@@ -247,24 +251,6 @@ impl Config {
                             reasoning_target
                         ));
                     }
-                }
-            }
-            if let Some(vision_model) = &profile.ant_vision_model {
-                if !self.models.contains_key(vision_model) {
-                    return Err(anyhow::anyhow!(
-                        "Profile '{}' ant_vision_model '{}' unknown",
-                        profile_name,
-                        vision_model
-                    ));
-                }
-            }
-            if let Some(vision_reasoning) = &profile.ant_vision_reasoning_model {
-                if !self.models.contains_key(vision_reasoning) {
-                    return Err(anyhow::anyhow!(
-                        "Profile '{}' ant_vision_reasoning_model '{}' unknown",
-                        profile_name,
-                        vision_reasoning
-                    ));
                 }
             }
         }
@@ -334,6 +320,7 @@ fn merge_api_params(parent: Option<ApiParams>, child: Option<ApiParams>) -> Opti
             let extra_body = deep_merge_json(p.extra_body, c.extra_body);
             Some(ApiParams {
                 timeout: c.timeout.or(p.timeout),
+                retry: c.retry.or(p.retry.clone()),
                 headers,
                 extra_body,
             })
@@ -375,9 +362,27 @@ fn deep_merge_json(
     result
 }
 
+// Improved glob regex helper
 pub fn glob_to_regex(pattern: &str) -> Result<Regex, regex::Error> {
+    // If pattern starts with ^ or ends with $, assume it's already a Regex (simplified check)
+    // OR if it contains .* which is regex-ish.
+    // Ideally we assume Glob unless specified.
+    // Fix for the bug: `.*` pattern.
+    // If pattern is exactly `.*`, treat as match-all regex.
+    if pattern == ".*" {
+        return Regex::new("(?i)^.*$");
+    }
+
+    // Standard Glob -> Regex
+    // Escape everything except *
     let escaped = regex::escape(pattern);
+    // Unescape * (it became \*) and replace with .*
     let regex_pattern = escaped.replace("\\*", ".*");
+
+    // For the bug case `.*` -> `\.\*` -> `\..*` which matches dot-star.
+    // We want `*` to be match all.
+    // If pattern is `*`, `escape` -> `\*`, replace -> `.*`. Correct.
+
     let final_pattern = format!("(?i)^{}$", regex_pattern);
     Regex::new(&final_pattern)
 }
