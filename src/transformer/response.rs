@@ -23,6 +23,22 @@ pub fn convert_response(resp: OpenAIChatCompletionResponse) -> Result<AnthropicM
     // 2. Content Construction
     let mut content_blocks = Vec::new();
 
+    // Handle Reasoning (Thinking)
+    if let Some(r) = &msg.reasoning {
+        let r_text = if let Value::String(s) = r {
+            s.clone()
+        } else {
+            r.to_string()
+        };
+        
+        if !r_text.is_empty() {
+            content_blocks.push(AnthropicContentBlock::Thinking {
+                signature: "signature".to_string(), // Placeholder
+                thinking: r_text,
+            });
+        }
+    }
+
     // Text content
     if let Some(content) = &msg.content {
         match content {

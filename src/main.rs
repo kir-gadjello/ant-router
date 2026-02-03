@@ -37,6 +37,7 @@ async fn main() -> Result<()> {
     // CLI Args parsing
     let mut cli_port = None;
     let mut cli_host = None;
+    let mut verbose = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -60,6 +61,9 @@ async fn main() -> Result<()> {
                     cli_host = Some(args[i + 1].clone());
                     i += 1;
                 }
+            }
+            "-v" | "--verbose" => {
+                verbose = true;
             }
             _ => {}
         }
@@ -129,6 +133,10 @@ async fn main() -> Result<()> {
         }
     }
 
+    info!("Config port: {:?}", config.server.port);
+    info!("CLI port: {:?}", cli_port);
+    info!("Final Resolved port: {}", port);
+
     let mut host = "0.0.0.0".to_string();
     if let Some(h) = &config.server.host {
         host = h.clone();
@@ -179,6 +187,7 @@ async fn main() -> Result<()> {
         client,
         base_url,
         api_key,
+        verbose,
     });
 
     // 5. Router

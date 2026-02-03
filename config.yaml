@@ -16,7 +16,7 @@
 # ----------------------------------------------------------------------------------
 server:
   host: "0.0.0.0"
-  port: 3000
+  port: 3001
 
 # ----------------------------------------------------------------------------------
 # Logging Configuration
@@ -53,13 +53,13 @@ models:
   # --- Base Templates ---
   _base_openrouter:
     provider: openrouter
-    api_params:
-      # extra_body:
-      #   stream_options:
-      #     include_usage: true
-      retry:
-        max_retries: 3
-        backoff_ms: 500
+    # api_params:
+    #   extra_body:
+    #     stream_options:
+    #       include_usage: true
+    #   retry:
+    #     max_retries: 3
+    #     backoff_ms: 500
 
   # --- Concrete Models ---
 
@@ -68,13 +68,20 @@ models:
     extends: _base_openrouter
     api_model_id: "stepfun/step-3.5-flash:free"
     aliases: ["step-3.5-flash"]
+    force_reasoning: high
+    capabilities:
+      reasoning: true
 
   # Gemini Models
-  "gemini-pro-exp":
+  "grok41fast":
     extends: _base_openrouter
-    api_model_id: "google/gemini-2.0-pro-exp-02-05:free"
-    aliases: ["gemini-2.0-pro"]
-
+    api_model_id: "x-ai/grok-4.1-fast"
+    aliases: ["grok-4.1-fast"]
+    min_reasoning: true
+    capabilities:
+      vision: true
+      reasoning: true
+  
   # Vision Models (Z-AI GLM)
   "glm-4d6-v":
     extends: _base_openrouter
@@ -105,8 +112,8 @@ profiles:
         target: "stepfun-flash"
         # Optional: reasoning_target: "stepfun-flash"
 
-  # Profile: Maps everything to Google's Gemini 2.0 Pro (Free)
-  gemini_free:
+  # Profile: Stepfun Flash (Free) with GLM vision fallback
+  grok41fast:
     rules:
       - pattern: ".*"
-        target: "gemini-pro-exp"
+        target: "grok41fast"

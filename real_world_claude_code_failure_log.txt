@@ -1,0 +1,1017 @@
+2026-02-03T22:17:46.558679Z  INFO Upstream Request Body: {
+  "max_tokens": 32000,
+  "messages": [
+    {
+      "content": "x-anthropic-billing-header: cc_version=2.1.29.ce4; cc_entrypoint=cli;",
+      "role": "system"
+    },
+    {
+      "content": "You are Claude Code, Anthropic's official CLI for Claude.",
+      "role": "system"
+    },
+    {
+      "content": "\nYou are an interactive CLI tool that helps users with software engineering tasks. Use the instructi... [truncated]",
+      "role": "system"
+    },
+    {
+      "content": "create a python hello world",
+      "role": "user"
+    },
+    {
+      "content": [
+        {
+          "text": "<thinking>The user wants me to create a Python \"Hello, World!\" program. Looking at the git status, I... [truncated]",
+          "type": "text"
+        },
+        {
+          "text": "I'll check the existing hello_world.py file first, then create or update it with a Python \"Hello, Wo... [truncated]",
+          "type": "text"
+        }
+      ],
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "function": {
+            "arguments": "{}",
+            "name": ""
+          },
+          "id": "chatcmpl-tool-9777cda1e1bd4182a43579bb62602221",
+          "type": "function"
+        },
+        {
+          "function": {
+            "arguments": "{}",
+            "name": ""
+          },
+          "id": "chatcmpl-tool-9777cda1e1bd4182a43579bb62602221",
+          "type": "function"
+        },
+        {
+          "function": {
+            "arguments": "{}",
+            "name": "Read"
+          },
+          "id": "chatcmpl-tool-9777cda1e1bd4182a43579bb62602221",
+          "type": "function"
+        },
+        {
+          "function": {
+            "arguments": "{}",
+            "name": ""
+          },
+          "id": "chatcmpl-tool-9777cda1e1bd4182a43579bb62602221",
+          "type": "function"
+        },
+        {
+          "function": {
+            "arguments": "{}",
+            "name": ""
+          },
+          "id": "chatcmpl-tool-9777cda1e1bd4182a43579bb62602221",
+          "type": "function"
+        },
+        {
+          "function": {
+            "arguments": "{}",
+            "name": ""
+          },
+          "id": "chatcmpl-tool-9777cda1e1bd4182a43579bb62602221",
+          "type": "function"
+        },
+        {
+          "function": {
+            "arguments": "{}",
+            "name": ""
+          },
+          "id": "chatcmpl-tool-9777cda1e1bd4182a43579bb62602221",
+          "type": "function"
+        },
+        {
+          "function": {
+            "arguments": "{}",
+            "name": ""
+          },
+          "id": "chatcmpl-tool-9777cda1e1bd4182a43579bb62602221",
+          "type": "function"
+        },
+        {
+          "function": {
+            "arguments": "{}",
+            "name": ""
+          },
+          "id": "chatcmpl-tool-9777cda1e1bd4182a43579bb62602221",
+          "type": "function"
+        },
+        {
+          "function": {
+            "arguments": "{}",
+            "name": ""
+          },
+          "id": "chatcmpl-tool-9777cda1e1bd4182a43579bb62602221",
+          "type": "function"
+        },
+        {
+          "function": {
+            "arguments": "{}",
+            "name": ""
+          },
+          "id": "chatcmpl-tool-9777cda1e1bd4182a43579bb62602221",
+          "type": "function"
+        },
+        {
+          "function": {
+            "arguments": "{}",
+            "name": ""
+          },
+          "id": "chatcmpl-tool-9777cda1e1bd4182a43579bb62602221",
+          "type": "function"
+        },
+        {
+          "function": {
+            "arguments": "{}",
+            "name": ""
+          },
+          "id": "chatcmpl-tool-9777cda1e1bd4182a43579bb62602221",
+          "type": "function"
+        }
+      ]
+    },
+    {
+      "content": "<tool_use_error>Error: No such tool available: </tool_use_error>",
+      "role": "tool",
+      "tool_call_id": "chatcmpl-tool-9777cda1e1bd4182a43579bb62602221"
+    },
+    {
+      "content": "<tool_use_error>Error: No such tool available: </tool_use_error>",
+      "role": "tool",
+      "tool_call_id": "chatcmpl-tool-9777cda1e1bd4182a43579bb62602221"
+    },
+    {
+      "content": "<tool_use_error>InputValidationError: Read failed due to the following issue:\nThe required parameter... [truncated]",
+      "role": "tool",
+      "tool_call_id": "chatcmpl-tool-9777cda1e1bd4182a43579bb62602221"
+    },
+    {
+      "content": "<tool_use_error>Error: No such tool available: </tool_use_error>",
+      "role": "tool",
+      "tool_call_id": "chatcmpl-tool-9777cda1e1bd4182a43579bb62602221"
+    },
+    {
+      "content": "<tool_use_error>Error: No such tool available: </tool_use_error>",
+      "role": "tool",
+      "tool_call_id": "chatcmpl-tool-9777cda1e1bd4182a43579bb62602221"
+    },
+    {
+      "content": "<tool_use_error>Error: No such tool available: </tool_use_error>",
+      "role": "tool",
+      "tool_call_id": "chatcmpl-tool-9777cda1e1bd4182a43579bb62602221"
+    },
+    {
+      "content": "<tool_use_error>Error: No such tool available: </tool_use_error>",
+      "role": "tool",
+      "tool_call_id": "chatcmpl-tool-9777cda1e1bd4182a43579bb62602221"
+    },
+    {
+      "content": "<tool_use_error>Error: No such tool available: </tool_use_error>",
+      "role": "tool",
+      "tool_call_id": "chatcmpl-tool-9777cda1e1bd4182a43579bb62602221"
+    },
+    {
+      "content": "<tool_use_error>Error: No such tool available: </tool_use_error>",
+      "role": "tool",
+      "tool_call_id": "chatcmpl-tool-9777cda1e1bd4182a43579bb62602221"
+    },
+    {
+      "content": "<tool_use_error>Error: No such tool available: </tool_use_error>",
+      "role": "tool",
+      "tool_call_id": "chatcmpl-tool-9777cda1e1bd4182a43579bb62602221"
+    },
+    {
+      "content": "<tool_use_error>Error: No such tool available: </tool_use_error>",
+      "role": "tool",
+      "tool_call_id": "chatcmpl-tool-9777cda1e1bd4182a43579bb62602221"
+    },
+    {
+      "content": "<tool_use_error>Error: No such tool available: </tool_use_error>",
+      "role": "tool",
+      "tool_call_id": "chatcmpl-tool-9777cda1e1bd4182a43579bb62602221"
+    },
+    {
+      "content": "<tool_use_error>Error: No such tool available: </tool_use_error>\n\n<system-reminder>\nThe task tools h... [truncated]",
+      "role": "tool",
+      "tool_call_id": "chatcmpl-tool-9777cda1e1bd4182a43579bb62602221"
+    }
+  ],
+  "model": "stepfun/step-3.5-flash:free",
+  "reasoning": {
+    "effort": "high"
+  },
+  "stream": true,
+  "tools": [
+    {
+      "function": {
+        "description": "Launch a new agent to handle complex, multi-step tasks autonomously. \n\nThe Task tool launches specia... [truncated]",
+        "name": "Task",
+        "parameters": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "description": "A short (3-5 word) description of the task",
+              "type": "string"
+            },
+            "max_turns": {
+              "description": "Maximum number of agentic turns (API round-trips) before stopping. Used internally for warmup.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "model": {
+              "description": "Optional model to use for this agent. If not specified, inherits from parent. Prefer haiku for quick... [truncated]",
+              "enum": [
+                "sonnet",
+                "opus",
+                "haiku"
+              ],
+              "type": "string"
+            },
+            "prompt": {
+              "description": "The task for the agent to perform",
+              "type": "string"
+            },
+            "resume": {
+              "description": "Optional agent ID to resume from. If provided, the agent will continue from the previous execution t... [truncated]",
+              "type": "string"
+            },
+            "run_in_background": {
+              "description": "Set to true to run this agent in the background. The tool result will include an output_file path - ... [truncated]",
+              "type": "boolean"
+            },
+            "subagent_type": {
+              "description": "The type of specialized agent to use for this task",
+              "type": "string"
+            }
+          },
+          "required": [
+            "description",
+            "prompt",
+            "subagent_type"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "- Retrieves output from a running or completed task (background shell, agent, or remote session)\n- T... [truncated]",
+        "name": "TaskOutput",
+        "parameters": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "block": {
+              "default": true,
+              "description": "Whether to wait for completion",
+              "type": "boolean"
+            },
+            "task_id": {
+              "description": "The task ID to get output from",
+              "type": "string"
+            },
+            "timeout": {
+              "default": 30000,
+              "description": "Max wait time in ms",
+              "maximum": 600000,
+              "minimum": 0,
+              "type": "number"
+            }
+          },
+          "required": [
+            "task_id",
+            "block",
+            "timeout"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Executes a given bash command with optional timeout. Working directory persists between commands; sh... [truncated]",
+        "name": "Bash",
+        "parameters": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "_simulatedSedEdit": {
+              "additionalProperties": false,
+              "description": "Internal: pre-computed sed edit result from preview",
+              "properties": {
+                "filePath": {
+                  "type": "string"
+                },
+                "newContent": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "filePath",
+                "newContent"
+              ],
+              "type": "object"
+            },
+            "command": {
+              "description": "The command to execute",
+              "type": "string"
+            },
+            "dangerouslyDisableSandbox": {
+              "description": "Set this to true to dangerously override sandbox mode and run commands without sandboxing.",
+              "type": "boolean"
+            },
+            "description": {
+              "description": "Clear, concise description of what this command does in active voice. Never use words like \"complex\"... [truncated]",
+              "type": "string"
+            },
+            "run_in_background": {
+              "description": "Set to true to run this command in the background. Use TaskOutput to read the output later.",
+              "type": "boolean"
+            },
+            "timeout": {
+              "description": "Optional timeout in milliseconds (max 600000)",
+              "type": "number"
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "- Fast file pattern matching tool that works with any codebase size\n- Supports glob patterns like \"*... [truncated]",
+        "name": "Glob",
+        "parameters": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "description": "The directory to search in. If not specified, the current working directory will be used. IMPORTANT:... [truncated]",
+              "type": "string"
+            },
+            "pattern": {
+              "description": "The glob pattern to match files against",
+              "type": "string"
+            }
+          },
+          "required": [
+            "pattern"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "A powerful search tool built on ripgrep\n\n  Usage:\n  - ALWAYS use Grep for search tasks. NEVER invoke... [truncated]",
+        "name": "Grep",
+        "parameters": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "-A": {
+              "description": "Number of lines to show after each match (rg -A). Requires output_mode: \"content\", ignored otherwise... [truncated]",
+              "type": "number"
+            },
+            "-B": {
+              "description": "Number of lines to show before each match (rg -B). Requires output_mode: \"content\", ignored otherwis... [truncated]",
+              "type": "number"
+            },
+            "-C": {
+              "description": "Alias for context.",
+              "type": "number"
+            },
+            "-i": {
+              "description": "Case insensitive search (rg -i)",
+              "type": "boolean"
+            },
+            "-n": {
+              "description": "Show line numbers in output (rg -n). Requires output_mode: \"content\", ignored otherwise. Defaults to... [truncated]",
+              "type": "boolean"
+            },
+            "context": {
+              "description": "Number of lines to show before and after each match (rg -C). Requires output_mode: \"content\", ignore... [truncated]",
+              "type": "number"
+            },
+            "glob": {
+              "description": "Glob pattern to filter files (e.g. \"*.js\", \"*.{ts,tsx}\") - maps to rg --glob",
+              "type": "string"
+            },
+            "head_limit": {
+              "description": "Limit output to first N lines/entries, equivalent to \"| head -N\". Works across all output modes: con... [truncated]",
+              "type": "number"
+            },
+            "multiline": {
+              "description": "Enable multiline mode where . matches newlines and patterns can span lines (rg -U --multiline-dotall... [truncated]",
+              "type": "boolean"
+            },
+            "offset": {
+              "description": "Skip first N lines/entries before applying head_limit, equivalent to \"| tail -n +N | head -N\". Works... [truncated]",
+              "type": "number"
+            },
+            "output_mode": {
+              "description": "Output mode: \"content\" shows matching lines (supports -A/-B/-C context, -n line numbers, head_limit)... [truncated]",
+              "enum": [
+                "content",
+                "files_with_matches",
+                "count"
+              ],
+              "type": "string"
+            },
+            "path": {
+              "description": "File or directory to search in (rg PATH). Defaults to current working directory.",
+              "type": "string"
+            },
+            "pattern": {
+              "description": "The regular expression pattern to search for in file contents",
+              "type": "string"
+            },
+            "type": {
+              "description": "File type to search (rg --type). Common types: js, py, rust, go, java, etc. More efficient than incl... [truncated]",
+              "type": "string"
+            }
+          },
+          "required": [
+            "pattern"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Use this tool when you are in plan mode and have finished writing your plan to the plan file and are... [truncated]",
+        "name": "ExitPlanMode",
+        "parameters": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": {},
+          "properties": {
+            "allowedPrompts": {
+              "description": "Prompt-based permissions needed to implement the plan. These describe categories of actions rather t... [truncated]",
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "prompt": {
+                    "description": "Semantic description of the action, e.g. \"run tests\", \"install dependencies\"",
+                    "type": "string"
+                  },
+                  "tool": {
+                    "description": "The tool this prompt applies to",
+                    "enum": [
+                      "Bash"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "tool",
+                  "prompt"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "pushToRemote": {
+              "description": "Whether to push the plan to a remote Claude.ai session",
+              "type": "boolean"
+            },
+            "remoteSessionId": {
+              "description": "The remote session ID if pushed to remote",
+              "type": "string"
+            },
+            "remoteSessionTitle": {
+              "description": "The remote session title if pushed to remote",
+              "type": "string"
+            },
+            "remoteSessionUrl": {
+              "description": "The remote session URL if pushed to remote",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Reads a file from the local filesystem. You can access any file directly by using this tool.\nAssume ... [truncated]",
+        "name": "Read",
+        "parameters": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "file_path": {
+              "description": "The absolute path to the file to read",
+              "type": "string"
+            },
+            "limit": {
+              "description": "The number of lines to read. Only provide if the file is too large to read at once.",
+              "type": "number"
+            },
+            "offset": {
+              "description": "The line number to start reading from. Only provide if the file is too large to read at once",
+              "type": "number"
+            }
+          },
+          "required": [
+            "file_path"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Performs exact string replacements in files.\n\nUsage:\n- You must use your `Read` tool at least once i... [truncated]",
+        "name": "Edit",
+        "parameters": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "file_path": {
+              "description": "The absolute path to the file to modify",
+              "type": "string"
+            },
+            "new_string": {
+              "description": "The text to replace it with (must be different from old_string)",
+              "type": "string"
+            },
+            "old_string": {
+              "description": "The text to replace",
+              "type": "string"
+            },
+            "replace_all": {
+              "default": false,
+              "description": "Replace all occurences of old_string (default false)",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "file_path",
+            "old_string",
+            "new_string"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Writes a file to the local filesystem.\n\nUsage:\n- This tool will overwrite the existing file if there... [truncated]",
+        "name": "Write",
+        "parameters": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "content": {
+              "description": "The content to write to the file",
+              "type": "string"
+            },
+            "file_path": {
+              "description": "The absolute path to the file to write (must be absolute, not relative)",
+              "type": "string"
+            }
+          },
+          "required": [
+            "file_path",
+            "content"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Completely replaces the contents of a specific cell in a Jupyter notebook (.ipynb file) with new sou... [truncated]",
+        "name": "NotebookEdit",
+        "parameters": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "cell_id": {
+              "description": "The ID of the cell to edit. When inserting a new cell, the new cell will be inserted after the cell ... [truncated]",
+              "type": "string"
+            },
+            "cell_type": {
+              "description": "The type of the cell (code or markdown). If not specified, it defaults to the current cell type. If ... [truncated]",
+              "enum": [
+                "code",
+                "markdown"
+              ],
+              "type": "string"
+            },
+            "edit_mode": {
+              "description": "The type of edit to make (replace, insert, delete). Defaults to replace.",
+              "enum": [
+                "replace",
+                "insert",
+                "delete"
+              ],
+              "type": "string"
+            },
+            "new_source": {
+              "description": "The new source for the cell",
+              "type": "string"
+            },
+            "notebook_path": {
+              "description": "The absolute path to the Jupyter notebook file to edit (must be absolute, not relative)",
+              "type": "string"
+            }
+          },
+          "required": [
+            "notebook_path",
+            "new_source"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "IMPORTANT: WebFetch WILL FAIL for authenticated or private URLs. Before using this tool, check if th... [truncated]",
+        "name": "WebFetch",
+        "parameters": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "prompt": {
+              "description": "The prompt to run on the fetched content",
+              "type": "string"
+            },
+            "url": {
+              "description": "The URL to fetch content from",
+              "type": "string"
+            }
+          },
+          "required": [
+            "url",
+            "prompt"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "\n- Allows Claude to search the web and use the results to inform responses\n- Provides up-to-date inf... [truncated]",
+        "name": "WebSearch",
+        "parameters": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "allowed_domains": {
+              "description": "Only include search results from these domains",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "blocked_domains": {
+              "description": "Never include search results from these domains",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "query": {
+              "description": "The search query to use",
+              "minLength": 2,
+              "type": "string"
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "\n- Stops a running background task by its ID\n- Takes a task_id parameter identifying the task to sto... [truncated]",
+        "name": "TaskStop",
+        "parameters": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "shell_id": {
+              "description": "Deprecated: use task_id instead",
+              "type": "string"
+            },
+            "task_id": {
+              "description": "The ID of the background task to stop",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Use this tool when you need to ask the user questions during execution. This allows you to:\n1. Gathe... [truncated]",
+        "name": "AskUserQuestion",
+        "parameters": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "answers": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "User answers collected by the permission component",
+              "propertyNames": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "metadata": {
+              "additionalProperties": false,
+              "description": "Optional metadata for tracking and analytics purposes. Not displayed to user.",
+              "properties": {
+                "source": {
+                  "description": "Optional identifier for the source of this question (e.g., \"remember\" for /remember command). Used f... [truncated]",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "questions": {
+              "description": "Questions to ask the user (1-4 questions)",
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "header": {
+                    "description": "Very short label displayed as a chip/tag (max 12 chars). Examples: \"Auth method\", \"Library\", \"Approa... [truncated]",
+                    "type": "string"
+                  },
+                  "multiSelect": {
+                    "default": false,
+                    "description": "Set to true to allow the user to select multiple options instead of just one. Use when choices are n... [truncated]",
+                    "type": "boolean"
+                  },
+                  "options": {
+                    "description": "The available choices for this question. Must have 2-4 options. Each option should be a distinct, mu... [truncated]",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "description": {
+                          "description": "Explanation of what this option means or what will happen if chosen. Useful for providing context ab... [truncated]",
+                          "type": "string"
+                        },
+                        "label": {
+                          "description": "The display text for this option that the user will see and select. Should be concise (1-5 words) an... [truncated]",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "label",
+                        "description"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 4,
+                    "minItems": 2,
+                    "type": "array"
+                  },
+                  "question": {
+                    "description": "The complete question to ask the user. Should be clear, specific, and end with a question mark. Exam... [truncated]",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "question",
+                  "header",
+                  "options",
+                  "multiSelect"
+                ],
+                "type": "object"
+              },
+              "maxItems": 4,
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": [
+            "questions"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Execute a skill within the main conversation\n\nWhen users ask you to perform tasks, check if any of t... [truncated]",
+        "name": "Skill",
+        "parameters": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "description": "Optional arguments for the skill",
+              "type": "string"
+            },
+            "skill": {
+              "description": "The skill name. E.g., \"commit\", \"review-pr\", or \"pdf\"",
+              "type": "string"
+            }
+          },
+          "required": [
+            "skill"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Use this tool proactively when you're about to start a non-trivial implementation task. Getting user... [truncated]",
+        "name": "EnterPlanMode",
+        "parameters": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {},
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Use this tool to create a structured task list for your current coding session. This helps you track... [truncated]",
+        "name": "TaskCreate",
+        "parameters": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "activeForm": {
+              "description": "Present continuous form shown in spinner when in_progress (e.g., \"Running tests\")",
+              "type": "string"
+            },
+            "description": {
+              "description": "A detailed description of what needs to be done",
+              "type": "string"
+            },
+            "metadata": {
+              "additionalProperties": {},
+              "description": "Arbitrary metadata to attach to the task",
+              "propertyNames": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "subject": {
+              "description": "A brief title for the task",
+              "type": "string"
+            }
+          },
+          "required": [
+            "subject",
+            "description"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Use this tool to retrieve a task by its ID from the task list.\n\n## When to Use This Tool\n\n- When you... [truncated]",
+        "name": "TaskGet",
+        "parameters": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "taskId": {
+              "description": "The ID of the task to retrieve",
+              "type": "string"
+            }
+          },
+          "required": [
+            "taskId"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Use this tool to update a task in the task list.\n\n## When to Use This Tool\n\n**Mark tasks as resolved... [truncated]",
+        "name": "TaskUpdate",
+        "parameters": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "activeForm": {
+              "description": "Present continuous form shown in spinner when in_progress (e.g., \"Running tests\")",
+              "type": "string"
+            },
+            "addBlockedBy": {
+              "description": "Task IDs that block this task",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "addBlocks": {
+              "description": "Task IDs that this task blocks",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "description": {
+              "description": "New description for the task",
+              "type": "string"
+            },
+            "metadata": {
+              "additionalProperties": {},
+              "description": "Metadata keys to merge into the task. Set a key to null to delete it.",
+              "propertyNames": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "owner": {
+              "description": "New owner for the task",
+              "type": "string"
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "pending",
+                    "in_progress",
+                    "completed"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "const": "deleted",
+                  "type": "string"
+                }
+              ],
+              "description": "New status for the task"
+            },
+            "subject": {
+              "description": "New subject for the task",
+              "type": "string"
+            },
+            "taskId": {
+              "description": "The ID of the task to update",
+              "type": "string"
+            }
+          },
+          "required": [
+            "taskId"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Use this tool to list all tasks in the task list.\n\n## When to Use This Tool\n\n- To see what tasks are... [truncated]",
+        "name": "TaskList",
+        "parameters": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {},
+          "type": "object"
+        }
+      },
+      "type": "function"
+    }
+  ]
+}
+2026-02-03T22:17:48.000258Z ERROR Upstream error 502 Bad Gateway: {"error":{"message":"Provider returned error","code":502,"metadata":{"raw":"{\"error\":{\"message\":\"500 Internal Server Error. Sorry something went wrong\",\"type\":\"engine_exception\"}}","provider_name":"StepFun","is_byok":false}},"user_id":"user_2iGgX7hXL71fzfrBb0jXVnt1wAq"}
+2026-02-03T22:17:48.000438Z ERROR response failed classification=Status code: 502 Bad Gateway latency=1442 ms
+^C⏎

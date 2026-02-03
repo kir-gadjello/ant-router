@@ -24,6 +24,7 @@ pub struct AppState {
     pub client: Client,
     pub base_url: String,
     pub api_key: Option<String>,
+    pub verbose: bool,
 }
 
 pub async fn health_check() -> impl IntoResponse {
@@ -84,8 +85,9 @@ pub async fn handle_messages(
     let target_logical_id = resolve_via_rules(profile, &payload.model, &request_features);
 
     // Lookup ModelConfig
-    let (wire_model, api_params) = if let Some(model_conf) = state.config.models.get(&target_logical_id) {
-        (state.config.get_wire_model_id(model_conf), model_conf.api_params.clone())
+    let model_conf = state.config.models.get(&target_logical_id);
+    let (wire_model, api_params) = if let Some(conf) = model_conf {
+        (state.config.get_wire_model_id(conf), conf.api_params.clone())
     } else {
         warn!("Logical model ID '{}' resolved but not found in models definition", target_logical_id);
         (target_logical_id.clone(), None)
@@ -105,7 +107,7 @@ pub async fn handle_messages(
     );
 
     // 4. Transform Request
-    let openai_req = match convert_request(payload.clone(), wire_model.clone()) {
+    let openai_req = match convert_request(payload.clone(), wire_model.clone(), model_conf) {
         Ok(req) => req,
         Err(e) => {
             error!("Failed to convert request: {}", e);
@@ -142,6 +144,15 @@ pub async fn handle_messages(
             }
         }
     }
+
+    // --- VERBOSE LOGGING START ---
+    if state.verbose {
+        // Create a truncated copy for logging
+        let mut log_body = final_body.clone();
+        truncate_long_strings(&mut log_body);
+        info!("Upstream Request Body: {}", serde_json::to_string_pretty(&log_body).unwrap_or_default());
+    }
+    // --- VERBOSE LOGGING END ---
 
     // 6. Send Request (with Retry)
     let max_retries = api_params.as_ref().and_then(|p| p.retry.as_ref()).map(|r| r.max_retries).unwrap_or(0);
@@ -242,7 +253,11 @@ pub async fn handle_messages(
             }
         };
 
-        if env::var("DEBUG").is_ok() {
+        if state.verbose {
+            let mut log_resp = serde_json::to_value(&openai_resp).unwrap_or_default();
+            truncate_long_strings(&mut log_resp);
+            info!("Upstream Response Body: {}", serde_json::to_string_pretty(&log_resp).unwrap_or_default());
+        } else if env::var("DEBUG").is_ok() {
             debug!("Upstream Response: {:?}", openai_resp);
         }
 
@@ -376,6 +391,29 @@ where
                 }
             }
         }
+    }
+}
+
+fn truncate_long_strings(v: &mut Value) {
+    match v {
+        Value::String(s) => {
+            if s.len() > 100 {
+                let mut truncated = s.chars().take(100).collect::<String>();
+                truncated.push_str("... [truncated]");
+                *s = truncated;
+            }
+        }
+        Value::Array(arr) => {
+            for item in arr {
+                truncate_long_strings(item);
+            }
+        }
+        Value::Object(map) => {
+            for (_, val) in map {
+                truncate_long_strings(val);
+            }
+        }
+        _ => {}
     }
 }
 

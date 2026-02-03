@@ -1,0 +1,27 @@
+server:
+  port: 0
+log_enabled: true
+no_ant: false
+upstream:
+  base_url: "DYNAMIC" # Placeholder
+  api_key_env_var: "TEST_KEY"
+
+current_profile: "test_profile"
+
+profiles:
+  test_profile:
+    rules:
+      - pattern: "stepfun-flash"
+        target: "stepfun-flash"
+      - pattern: "stepfun-reasoning"
+        target: "stepfun-reasoning"
+
+models:
+  stepfun-flash:
+    provider: openrouter
+    api_model_id: "stepfun/step-3.5-flash:free"
+  
+  stepfun-reasoning:
+    provider: openrouter
+    api_model_id: "stepfun/step-3.5-flash:free"
+    min_reasoning: true

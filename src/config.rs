@@ -5,7 +5,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
-use tracing::{debug, warn};
+use tracing::warn;
 
 // ==================================================================================
 // CONFIG TYPES
@@ -107,8 +107,30 @@ pub struct ModelConfig {
     #[serde(default)]
     pub capabilities: Option<Capabilities>,
 
+    // New Reasoning Configuration
+    /// Enforce minimum reasoning requirements. 
+    /// If client doesn't request reasoning, this is applied.
+    /// If client requests lower budget than this (if budget), it is upgraded.
+    #[serde(default)]
+    pub min_reasoning: Option<ReasoningConfig>,
+    
+    /// Force specific reasoning settings, overriding client request.
+    #[serde(default)]
+    pub force_reasoning: Option<ReasoningConfig>,
+
     #[serde(default)]
     pub api_params: Option<ApiParams>,
+}
+
+#[derive(Debug, Deserialize, Clone, Serialize)]
+#[serde(untagged)]
+pub enum ReasoningConfig {
+    /// Enable (true="low" for min, "medium" for force) or Disable (false="none")
+    Bool(bool),
+    /// Specific effort level ("low", "medium", "high")
+    Level(String), 
+    /// Token budget (maps to "max_tokens")
+    Budget(u32),   
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize, Default)]
@@ -274,6 +296,8 @@ fn merge_models(parent: ModelConfig, child: ModelConfig) -> ModelConfig {
         aliases: [parent.aliases, child.aliases].concat(),
         context: merge_context(parent.context, child.context),
         capabilities: merge_capabilities(parent.capabilities, child.capabilities),
+        min_reasoning: child.min_reasoning.or(parent.min_reasoning),
+        force_reasoning: child.force_reasoning.or(parent.force_reasoning),
         api_params: merge_api_params(parent.api_params, child.api_params),
     }
 }

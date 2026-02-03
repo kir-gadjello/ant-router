@@ -21,6 +21,7 @@ async fn spawn_app(config: Config) -> (String, MockServer) {
         client: Client::new(),
         base_url: mock_server.uri(),
         api_key: Some("test-key".to_string()),
+        verbose: false,
     });
 
     let app = create_router(app_state);
@@ -103,6 +104,9 @@ async fn test_basic_message_echo() {
         .and(path("/v1/chat/completions"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "created": 1234567890,
+            "model": "gpt-3.5-turbo",
             "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello world"}}],
         })))
         .mount(&mock_server)
@@ -136,7 +140,11 @@ async fn test_config_resolution() {
 
     Mock::given(method("POST"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "id": "1", "choices": [{"message": {"role": "assistant", "content": "ok"}, "index": 0}]
+            "id": "1",
+            "object": "chat.completion",
+            "created": 123,
+            "model": "test-model",
+            "choices": [{"message": {"role": "assistant", "content": "ok"}, "index": 0}]
         })))
         .mount(&mock_server)
         .await;
@@ -179,7 +187,11 @@ async fn test_vision_routing() {
 
     Mock::given(method("POST"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "id": "1", "choices": [{"message": {"role": "assistant", "content": "ok"}, "index": 0}]
+            "id": "1",
+            "object": "chat.completion",
+            "created": 123,
+            "model": "test-model",
+            "choices": [{"message": {"role": "assistant", "content": "ok"}, "index": 0}]
         })))
         .mount(&mock_server)
         .await;
@@ -274,7 +286,11 @@ async fn test_bug_default_catchall() {
 
     Mock::given(method("POST"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "id": "1", "choices": [{"message": {"role": "assistant", "content": "ok"}, "index": 0}]
+            "id": "1",
+            "object": "chat.completion",
+            "created": 123,
+            "model": "test-model",
+            "choices": [{"message": {"role": "assistant", "content": "ok"}, "index": 0}]
         })))
         .mount(&mock_server)
         .await;
@@ -291,8 +307,42 @@ async fn test_bug_default_catchall() {
 
     let reqs = mock_server.received_requests().await.unwrap();
     let r1: OpenAIChatCompletionRequest = serde_json::from_slice(&reqs[0].body).unwrap();
-
-    // If bug persists, this would be "anthropic/claude-sonnet-4.5" (input)
-    // If fixed, this should be "caught"
     assert_eq!(r1.model, "caught");
+}
+
+#[tokio::test]
+async fn test_reasoning_parameter_mapping() {
+    let (addr, mock_server) = spawn_app(test_config()).await;
+    let client = Client::new();
+
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "1",
+            "choices": [{"message": {"role": "assistant", "content": "ok"}, "index": 0}]
+        })))
+        .mount(&mock_server)
+        .await;
+
+    // Send Anthropic request with thinking enabled
+    client
+        .post(format!("{}/v1/messages", addr))
+        .json(&json!({
+            "model": "reasoning-claude",
+            "messages": [{"role":"user","content":"Think about it"}],
+            "max_tokens": 2048,
+            "thinking": {
+                "type": "enabled",
+                "budget_tokens": 1024
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let reqs = mock_server.received_requests().await.unwrap();
+    let upstream_body: serde_json::Value = serde_json::from_slice(&reqs[0].body).unwrap();
+
+    // Verify reasoning parameter is present and correct
+    let reasoning = upstream_body.get("reasoning").expect("reasoning field missing");
+    assert_eq!(reasoning["max_tokens"], 1024);
 }

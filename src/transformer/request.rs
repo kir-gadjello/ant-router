@@ -1,3 +1,4 @@
+use crate::config::{ModelConfig, ReasoningConfig};
 use crate::protocol::*;
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -5,6 +6,7 @@ use serde_json::{json, Value};
 pub fn convert_request(
     req: AnthropicMessageRequest,
     resolved_model: String,
+    model_config: Option<&ModelConfig>,
 ) -> Result<OpenAIChatCompletionRequest> {
     let mut openai_messages = Vec::new();
 
@@ -18,6 +20,7 @@ pub fn convert_request(
                     name: None,
                     tool_calls: None,
                     tool_call_id: None,
+                    reasoning: None,
                 });
             }
             SystemPrompt::Array(blocks) => {
@@ -29,6 +32,7 @@ pub fn convert_request(
                             name: None,
                             tool_calls: None,
                             tool_call_id: None,
+                            reasoning: None,
                         });
                     }
                 }
@@ -46,6 +50,7 @@ pub fn convert_request(
                     name: None,
                     tool_calls: None,
                     tool_call_id: None,
+                    reasoning: None,
                 });
             }
             AnthropicMessageContent::Blocks(blocks) => {
@@ -79,6 +84,7 @@ pub fn convert_request(
                             name: None,
                             tool_calls: None,
                             tool_call_id: Some(tool_use_id),
+                            reasoning: None,
                         });
                     }
                 }
@@ -160,6 +166,7 @@ pub fn convert_request(
                             name: None,
                             tool_calls: final_tool_calls,
                             tool_call_id: None,
+                            reasoning: None,
                         });
                     }
                 }
@@ -203,6 +210,49 @@ pub fn convert_request(
         }),
     });
 
+    // Handle Reasoning/Thinking Mapping
+    let mut reasoning = req.thinking.map(|t| {
+        // Map Anthropic budget_tokens to OpenRouter reasoning.max_tokens
+        json!({
+            "max_tokens": t.budget_tokens
+        })
+    });
+
+    if let Some(conf) = model_config {
+        // Force Override
+        if let Some(force) = &conf.force_reasoning {
+             reasoning = Some(match force {
+                ReasoningConfig::Bool(true) => json!({"effort": "medium"}),
+                ReasoningConfig::Bool(false) => json!({"effort": "none"}),
+                ReasoningConfig::Level(lvl) => json!({"effort": lvl}),
+                ReasoningConfig::Budget(tokens) => json!({"max_tokens": tokens}),
+             });
+        }
+        // Min Override
+        else if let Some(min) = &conf.min_reasoning {
+             if reasoning.is_none() {
+                 reasoning = Some(match min {
+                    ReasoningConfig::Bool(true) => json!({"effort": "low"}),
+                    ReasoningConfig::Bool(false) => json!({"effort": "none"}),
+                    ReasoningConfig::Level(lvl) => json!({"effort": lvl}),
+                    ReasoningConfig::Budget(tokens) => json!({"max_tokens": tokens}),
+                 });
+             } else {
+                 // Check if we need to upgrade existing reasoning
+                 // Only possible if both are Budget
+                 if let ReasoningConfig::Budget(min_tokens) = min {
+                     if let Some(obj) = reasoning.as_mut().and_then(|v| v.as_object_mut()) {
+                         if let Some(current_tokens) = obj.get("max_tokens").and_then(|v| v.as_u64()) {
+                             if (current_tokens as u32) < *min_tokens {
+                                 obj.insert("max_tokens".to_string(), json!(min_tokens));
+                             }
+                         }
+                     }
+                 }
+             }
+        }
+    }
+
     Ok(OpenAIChatCompletionRequest {
         model: resolved_model,
         messages: openai_messages,
@@ -216,6 +266,7 @@ pub fn convert_request(
         presence_penalty: None,
         frequency_penalty: None,
         user: None,
+        reasoning,
     })
 }
 
