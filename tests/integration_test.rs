@@ -293,3 +293,104 @@ async fn test_config_resolution() {
     let r2: OpenAIChatCompletionRequest = serde_json::from_slice(&reqs[0].body).unwrap();
     assert_eq!(r2.model, "openai/o1");
 }
+
+#[tokio::test]
+async fn test_parallel_tool_calls() {
+    let (addr, mock_server) = spawn_app(test_config()).await;
+    let client = Client::new();
+
+    // Mock SSE response with parallel tool calls
+    // OpenAI sends multiple tool_calls in one delta or across deltas
+    // We simulate them interleaved or in same chunk
+
+    // Chunk 1: Start two tools
+    let c1 = json!({
+        "id": "msg_1",
+        "object": "chunk", "created": 123, "model": "m",
+        "choices": [{
+            "index": 0,
+            "delta": {
+                "tool_calls": [
+                    { "index": 0, "id": "call_1", "type": "function", "function": { "name": "weather", "arguments": "" } },
+                    { "index": 1, "id": "call_2", "type": "function", "function": { "name": "stock", "arguments": "" } }
+                ]
+            }
+        }]
+    });
+
+    // Chunk 2: Args for tool 0
+    let c2 = json!({
+        "id": "msg_1",
+        "object": "chunk", "created": 123, "model": "m",
+        "choices": [{
+            "index": 0,
+            "delta": {
+                "tool_calls": [
+                    { "index": 0, "function": { "arguments": "{\"loc\":" } }
+                ]
+            }
+        }]
+    });
+
+    // Chunk 3: Args for tool 1
+    let c3 = json!({
+        "id": "msg_1",
+        "object": "chunk", "created": 123, "model": "m",
+        "choices": [{
+            "index": 0,
+            "delta": {
+                "tool_calls": [
+                    { "index": 1, "function": { "arguments": "{\"sym\":" } }
+                ]
+            }
+        }]
+    });
+
+    // Chunk 4: Finish args
+    let c4 = json!({
+        "id": "msg_1",
+        "object": "chunk", "created": 123, "model": "m",
+        "choices": [{
+            "index": 0,
+            "delta": {
+                "tool_calls": [
+                    { "index": 0, "function": { "arguments": "\"NY\"}" } },
+                    { "index": 1, "function": { "arguments": "\"AAPL\"}" } }
+                ]
+            }
+        }]
+    });
+
+    let body = format!(
+        "data: {}\n\ndata: {}\n\ndata: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+        c1, c2, c3, c4
+    );
+
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body))
+        .mount(&mock_server)
+        .await;
+
+    let resp = client
+        .post(format!("{}/v1/messages", addr))
+        .json(&json!({
+            "model": "claude-3",
+            "messages": [{"role":"user", "content":"hi"}],
+            "stream": true,
+            "max_tokens": 100
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let text = resp.text().await.unwrap();
+
+    // Verify we get content_block_start for both tools
+    assert!(text.contains("weather"));
+    assert!(text.contains("stock"));
+
+    // Verify we get deltas for both
+    assert!(text.contains("input_json_delta"));
+    assert!(text.contains("NY"));
+    assert!(text.contains("AAPL"));
+}
