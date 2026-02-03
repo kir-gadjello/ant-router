@@ -16,5 +16,5 @@ async fn test_default_config_parsing() {
     assert!(config.profiles.contains_key("stepfun"));
 
     // Check UMCP model
-    assert!(config.models.contains_key("gpt-4o"));
+    assert!(config.models.contains_key("glm-4d6-v"));
 }
