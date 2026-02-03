@@ -1,12 +1,17 @@
 use anthropic_bridge::{config::Config, create_router, handlers::AppState};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::env;
 use std::fs;
+use std::io::{self, Write};
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{info, Level};
+use tracing::{info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
+
+// Embed default config
+const DEFAULT_CONFIG_CONTENT: &str = include_str!("../config.default.yaml");
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -65,6 +70,37 @@ async fn main() -> Result<()> {
         config_path = p;
     }
 
+    // Onboarding Logic: Check if config exists, if not and interactive, prompt creation.
+    if !Path::new(&config_path).exists() {
+        // Check fallback path
+        if let Ok(home) = env::var("HOME") {
+            let fallback_path = Path::new(&home).join(".ant-router").join("config.yaml");
+            if fallback_path.exists() {
+                config_path = fallback_path.to_string_lossy().to_string();
+            } else if atty::is(atty::Stream::Stdin) {
+                // Interactive and no config found anywhere. Prompt user.
+                println!("No configuration file found at '{}' or '~/.ant-router/config.yaml'.", config_path);
+                print!("Would you like to create a default config at ~/.ant-router/config.yaml? [Y/n] ");
+                io::stdout().flush()?;
+
+                let mut input = String::new();
+                io::stdin().read_line(&mut input)?;
+                let input = input.trim().to_lowercase();
+
+                if input == "y" || input == "yes" || input.is_empty() {
+                    let target_dir = Path::new(&home).join(".ant-router");
+                    fs::create_dir_all(&target_dir).context("Failed to create config directory")?;
+                    let target_path = target_dir.join("config.yaml");
+                    fs::write(&target_path, DEFAULT_CONFIG_CONTENT).context("Failed to write default config")?;
+                    println!("Created default config at {:?}", target_path);
+
+                    // Switch to using the new config
+                    config_path = target_path.to_string_lossy().to_string();
+                }
+            }
+        }
+    }
+
     info!("Loading config from {}", config_path);
     let config = Config::load(&config_path).await?;
 
@@ -115,25 +151,16 @@ async fn main() -> Result<()> {
     }
 
     // API Key
-    // Logic: If custom URL set via Env, maybe skip key?
-    // Spec logic was: "If ANTHROPIC_PROXY_BASE_URL is set, no API key required... Otherwise requires OPENROUTER_API_KEY"
-    // We should try to respect that but also support the new config.
-
     let env_url_set = env::var("ANTHROPIC_PROXY_BASE_URL").is_ok();
-
     let api_key_var_name = config.upstream.api_key_env_var.as_deref().unwrap_or("OPENROUTER_API_KEY");
 
     let api_key = if !env_url_set {
-        // Try to load key from the specified env var
         match env::var(api_key_var_name) {
             Ok(k) => Some(k),
             Err(_) => {
-                // If using default OpenRouter, key is required.
-                // However, user might be relying on legacy behavior or custom config.
-                // Let's log warning and return None, potentially failing upstream if auth is needed.
-                // Or panic if strict. Spec said "Otherwise requires OPENROUTER_API_KEY".
                 if base_url.contains("openrouter.ai") {
-                     panic!("{} required when using default OpenRouter endpoint", api_key_var_name);
+                     // We don't panic here to allow starting up for help/health check, but warn heavily
+                     warn!("{} required when using default OpenRouter endpoint. Requests may fail.", api_key_var_name);
                 }
                 None
             }
