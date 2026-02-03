@@ -1,6 +1,7 @@
 use anthropic_bridge::{config::Config, create_router, handlers::AppState};
 use anyhow::Result;
 use std::env;
+use std::fs;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -72,6 +73,17 @@ async fn main() -> Result<()> {
 
     info!("Loading config from {}", config_path);
     let config = Config::load(&config_path).await?;
+
+    // Ensure log directory exists if logging is enabled
+    if config.log_enabled {
+        let log_path = config.get_log_path();
+        if let Some(parent) = log_path.parent() {
+            if !parent.exists() {
+                info!("Creating log directory: {:?}", parent);
+                fs::create_dir_all(parent)?;
+            }
+        }
+    }
 
     // 3. Auth & Upstream
     let base_url = env::var("ANTHROPIC_PROXY_BASE_URL")
