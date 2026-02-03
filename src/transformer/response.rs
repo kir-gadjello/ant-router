@@ -24,9 +24,26 @@ pub fn convert_response(resp: OpenAIChatCompletionResponse) -> Result<AnthropicM
     let mut content_blocks = Vec::new();
 
     // Text content
-    if let Some(text) = &msg.content {
-        if !text.is_empty() {
-            content_blocks.push(AnthropicContentBlock::Text { text: text.clone() });
+    if let Some(content) = &msg.content {
+        match content {
+            OpenAIContent::String(text) => {
+                if !text.is_empty() {
+                    content_blocks.push(AnthropicContentBlock::Text { text: text.clone() });
+                }
+            }
+            OpenAIContent::Array(parts) => {
+                for part in parts {
+                    match part {
+                        OpenAIContentPart::Text { text } => {
+                            content_blocks.push(AnthropicContentBlock::Text { text: text.clone() });
+                        }
+                        // Anthropic response doesn't usually include images back to user in this format,
+                        // usually just text/tool_use. If OpenAI echoes images, we might skip or try to map?
+                        // For now, only mapping text back.
+                        _ => {}
+                    }
+                }
+            }
         }
     }
 
@@ -60,8 +77,8 @@ pub fn convert_response(resp: OpenAIChatCompletionResponse) -> Result<AnthropicM
         }
     } else {
         // Fallback estimation
-        let input_tokens = estimate_tokens(msg.content.as_deref().unwrap_or(""));
-        let output_tokens = estimate_tokens(msg.content.as_deref().unwrap_or("")); // Rough approx
+        let input_tokens = estimate_tokens_content(&msg.content);
+        let output_tokens = estimate_tokens_content(&msg.content); // Rough approx
         AnthropicUsage {
             input_tokens,
             output_tokens,
@@ -78,6 +95,20 @@ pub fn convert_response(resp: OpenAIChatCompletionResponse) -> Result<AnthropicM
         stop_sequence: None,
         usage,
     })
+}
+
+fn estimate_tokens_content(content: &Option<OpenAIContent>) -> u32 {
+    match content {
+        Some(OpenAIContent::String(s)) => estimate_tokens(s),
+        Some(OpenAIContent::Array(parts)) => parts
+            .iter()
+            .map(|p| match p {
+                OpenAIContentPart::Text { text } => estimate_tokens(text),
+                _ => 0,
+            })
+            .sum(),
+        None => 0,
+    }
 }
 
 fn estimate_tokens(text: &str) -> u32 {
