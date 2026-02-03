@@ -269,3 +269,45 @@ async fn test_mixed_images_text() {
         _ => panic!("Expected content array"),
     }
 }
+
+#[tokio::test]
+async fn test_model_id_mapping() {
+    // Config: Map "claude-3-opus" -> "openai/gpt-4o"
+    let config = Config {
+        current_profile: "test".to_string(),
+        models: HashMap::from([
+            ("claude-3-opus".to_string(), ModelConfig {
+                api_model_id: Some("openai/gpt-4o".to_string()),
+                ..Default::default()
+            })
+        ]),
+        ..Default::default()
+    };
+
+    let (addr, mock_server) = spawn_app(config).await;
+    let client = Client::new();
+
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "1", "choices": [{"message": {"role": "assistant", "content": "ok"}, "index": 0}]
+        })))
+        .mount(&mock_server)
+        .await;
+
+    // Send request with original ID
+    client.post(format!("{}/v1/messages", addr))
+        .json(&json!({
+            "model": "claude-3-opus",
+            "messages": [{"role":"user", "content":"hi"}],
+            "max_tokens": 10
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let reqs = mock_server.received_requests().await.unwrap();
+    let upstream_req: OpenAIChatCompletionRequest = serde_json::from_slice(&reqs[0].body).unwrap();
+
+    // Verify mapped ID was sent upstream
+    assert_eq!(upstream_req.model, "openai/gpt-4o");
+}
