@@ -1,0 +1,124 @@
+# ==================================================================================
+# Unified Model Configuration Protocol (UMCP) v1.0 - Default Configuration
+# ==================================================================================
+#
+# This configuration file defines the server behavior, upstream provider settings,
+# and model definitions. It supports inheritance, deep merging, and intelligent routing.
+#
+# USAGE:
+#   This file is loaded by default from `./config.yaml` or `$HOME/.ant-router/config.yaml`.
+#   You can override values using environment variables.
+#
+# ==================================================================================
+
+# ----------------------------------------------------------------------------------
+# Server Configuration
+# ----------------------------------------------------------------------------------
+# Controls the HTTP server listener.
+server:
+  # The interface to bind to. "0.0.0.0" exposes the server to the network.
+  # Overridable via `HOST` env var.
+  host: "0.0.0.0"
+
+  # The port to listen on.
+  # Overridable via `PORT` env var.
+  port: 3000
+
+# ----------------------------------------------------------------------------------
+# Logging Configuration
+# ----------------------------------------------------------------------------------
+# Controls request logging behavior.
+# Logs are written in JSONL format with metadata.
+log_enabled: true
+
+# Path to the log file.
+# Default: $HOME/.ant-router/logs/.log.jsonl
+# log_file: "./requests.jsonl"
+
+# ----------------------------------------------------------------------------------
+# Default Upstream Configuration
+# ----------------------------------------------------------------------------------
+# Defines the global upstream provider settings.
+upstream:
+  # The base URL for the upstream OpenAI-compatible API.
+  # Default: "https://openrouter.ai/api"
+  # Overridable via `ANTHROPIC_PROXY_BASE_URL` env var.
+  base_url: "https://openrouter.ai/api"
+
+  # The environment variable name that holds the API Key.
+  # Default: "OPENROUTER_API_KEY"
+  # If base_url is set via env var, this key check might be skipped depending on logic.
+  api_key_env_var: "OPENROUTER_API_KEY"
+
+# ----------------------------------------------------------------------------------
+# Vision Routing
+# ----------------------------------------------------------------------------------
+# Smart routing for requests containing images.
+# If a request has images, these models are used instead of the requested model ID.
+
+# Model to use for standard vision requests
+ant_vision_model: "openai/gpt-4o"
+
+# Model to use for vision requests with thinking/reasoning enabled
+ant_vision_reasoning_model: "openai/o1"
+
+# ----------------------------------------------------------------------------------
+# Current Profile (Legacy Routing)
+# ----------------------------------------------------------------------------------
+# Active legacy profile. Used if no UMCP model is matched.
+current_profile: "stepfun"
+
+# ----------------------------------------------------------------------------------
+# Model Definitions (UMCP)
+# ----------------------------------------------------------------------------------
+# Define models with capabilities, context limits, and upstream parameters.
+models:
+
+  # --- Base Templates ---
+  _base_openrouter:
+    provider: openrouter
+    api_params:
+      extra_body:
+        stream_options:
+          include_usage: true
+
+  # --- Concrete Models ---
+
+  # Example: Claude 3.5 Sonnet mapped to OpenRouter
+  "claude-3-5-sonnet-20240620":
+    extends: _base_openrouter
+    api_model_id: "anthropic/claude-3.5-sonnet"
+    aliases: ["sonnet-3.5", "claude-3-5-sonnet"]
+    context:
+      window: 200000
+    capabilities:
+      vision: true
+      tools: true
+
+  # Example: GPT-4o
+  "openai/gpt-4o":
+    extends: _base_openrouter
+    api_model_id: "openai/gpt-4o"
+    aliases: ["gpt-4o", "4o"]
+    context:
+      window: 128000
+    capabilities:
+      vision: true
+      tools: true
+
+# ----------------------------------------------------------------------------------
+# Profiles (Legacy Support)
+# ----------------------------------------------------------------------------------
+profiles:
+  # Profile: Stepfun Flash (Free)
+  stepfun:
+    rules:
+      - pattern: ".*"
+        target: "stepfun/step-3.5-flash:free"
+        reasoning_target: "stepfun/step-3.5-flash:free"
+
+  # Profile: Maps everything to Google's Gemini 2.0 Pro (Free)
+  gemini_free:
+    rules:
+      - pattern: ".*"
+        target: "google/gemini-2.0-pro-exp-02-05:free"

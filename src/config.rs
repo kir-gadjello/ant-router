@@ -41,10 +41,30 @@ pub struct Config {
     #[serde(default = "default_log_enabled")]
     pub log_enabled: bool,
     pub log_file: Option<String>,
+
+    // Server Configuration
+    #[serde(default)]
+    pub server: ServerConfig,
+
+    // Default Upstream Configuration (Global)
+    #[serde(default)]
+    pub upstream: UpstreamConfig,
 }
 
 fn default_log_enabled() -> bool {
     true
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct ServerConfig {
+    pub host: Option<String>,
+    pub port: Option<u16>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct UpstreamConfig {
+    pub base_url: Option<String>,
+    pub api_key_env_var: Option<String>, // Defines WHICH env var holds the key, defaulting to OPENROUTER_API_KEY
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -153,17 +173,7 @@ impl Config {
 
         if !config_path.exists() {
             warn!("Config file not found at {:?}, using defaults", config_path);
-            return Ok(Config {
-                current_profile: "default".to_string(),
-                profiles: HashMap::new(),
-                defaults: None,
-                providers: HashMap::new(),
-                models: HashMap::new(),
-                ant_vision_model: None,
-                ant_vision_reasoning_model: None,
-                log_enabled: true,
-                log_file: None,
-            });
+            return Ok(Config::default());
         }
 
         let content = tokio::fs::read_to_string(&config_path)
@@ -504,6 +514,8 @@ impl Default for Config {
             ant_vision_reasoning_model: None,
             log_enabled: true,
             log_file: None,
+            server: ServerConfig::default(),
+            upstream: UpstreamConfig::default(),
         }
     }
 }
