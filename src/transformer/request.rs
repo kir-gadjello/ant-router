@@ -95,11 +95,16 @@ pub fn convert_request(
                             }
                             AnthropicContentBlock::Image { source } => {
                                 // Convert Anthropic image to OpenAI image_url
-                                let data_uri =
-                                    format!("data:{};base64,{}", source.media_type, source.data);
+                                let image_url = match source {
+                                    AnthropicImageSource::Base64 { media_type, data } => {
+                                        format!("data:{};base64,{}", media_type, data)
+                                    }
+                                    AnthropicImageSource::Url { url } => url,
+                                };
+
                                 content_parts.push(OpenAIContentPart::ImageUrl {
                                     image_url: OpenAIImageUrl {
-                                        url: data_uri,
+                                        url: image_url,
                                         detail: Some("auto".to_string()),
                                     },
                                 });

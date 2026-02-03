@@ -105,10 +105,12 @@ pub struct AnthropicTool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AnthropicImageSource {
-    pub r#type: String, // "base64"
-    pub media_type: String,
-    pub data: String,
+#[serde(tag = "type")]
+pub enum AnthropicImageSource {
+    #[serde(rename = "base64")]
+    Base64 { media_type: String, data: String },
+    #[serde(rename = "url")]
+    Url { url: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

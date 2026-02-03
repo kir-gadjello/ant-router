@@ -174,3 +174,98 @@ async fn test_umcp_extra_body() {
     // Check model ID mapped
     assert_eq!(body["model"], "deepseek/v3");
 }
+
+#[tokio::test]
+async fn test_vision_url_input() {
+    let (addr, mock_server) = spawn_app(test_config()).await;
+    let client = Client::new();
+
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "1", "choices": [{"message": {"role": "assistant", "content": "image ok"}, "index": 0}]
+        })))
+        .mount(&mock_server)
+        .await;
+
+    client.post(format!("{}/v1/messages", addr))
+        .json(&json!({
+            "model": "claude-vision",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Check URL"},
+                    {"type": "image", "source": {"type": "url", "url": "https://example.com/image.jpg"}}
+                ]
+            }],
+            "max_tokens": 100
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let reqs = mock_server.received_requests().await.unwrap();
+    let r1: OpenAIChatCompletionRequest = serde_json::from_slice(&reqs[0].body).unwrap();
+
+    match &r1.messages[0].content {
+        Some(OpenAIContent::Array(parts)) => {
+            let img_part = parts
+                .iter()
+                .find(|p| matches!(p, OpenAIContentPart::ImageUrl { .. }))
+                .unwrap();
+            if let OpenAIContentPart::ImageUrl { image_url } = img_part {
+                assert_eq!(image_url.url, "https://example.com/image.jpg");
+            } else {
+                panic!("Expected ImageUrl");
+            }
+        }
+        _ => panic!("Expected content array"),
+    }
+}
+
+#[tokio::test]
+async fn test_mixed_images_text() {
+    let (addr, mock_server) = spawn_app(test_config()).await;
+    let client = Client::new();
+
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "1", "choices": [{"message": {"role": "assistant", "content": "mixed ok"}, "index": 0}]
+        })))
+        .mount(&mock_server)
+        .await;
+
+    client.post(format!("{}/v1/messages", addr))
+        .json(&json!({
+            "model": "claude-vision",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Start"},
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "A"}},
+                    {"type": "text", "text": "Middle"},
+                    {"type": "image", "source": {"type": "url", "url": "http://img.com/B.jpg"}},
+                    {"type": "text", "text": "End"}
+                ]
+            }],
+            "max_tokens": 100
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let reqs = mock_server.received_requests().await.unwrap();
+    let r1: OpenAIChatCompletionRequest = serde_json::from_slice(&reqs[0].body).unwrap();
+
+    match &r1.messages[0].content {
+        Some(OpenAIContent::Array(parts)) => {
+            assert_eq!(parts.len(), 5);
+            // Verify order preservation
+            matches!(&parts[0], OpenAIContentPart::Text { text } if text == "Start");
+            matches!(&parts[1], OpenAIContentPart::ImageUrl { .. });
+            matches!(&parts[2], OpenAIContentPart::Text { text } if text == "Middle");
+            matches!(&parts[3], OpenAIContentPart::ImageUrl { .. });
+            matches!(&parts[4], OpenAIContentPart::Text { text } if text == "End");
+        }
+        _ => panic!("Expected content array"),
+    }
+}
