@@ -3,6 +3,7 @@ use anyhow::Result;
 use std::env;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
@@ -87,7 +88,10 @@ async fn main() -> Result<()> {
         None
     };
 
-    let client = reqwest::Client::builder().build()?;
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(30))
+        .read_timeout(Duration::from_secs(300))
+        .build()?;
 
     let state = Arc::new(AppState {
         config,

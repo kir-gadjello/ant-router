@@ -9,6 +9,7 @@ use axum::{
         IntoResponse, Sse,
     },
 };
+use bytes::BytesMut;
 use futures::StreamExt;
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -173,28 +174,99 @@ where
     S: futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Unpin,
 {
     async_stream::try_stream! {
-        let mut buffer = String::new();
+        let mut buffer = BytesMut::new();
         let mut stream = byte_stream;
 
-        while let Some(chunk) = stream.next().await {
-            let bytes = chunk?;
-            let s = String::from_utf8_lossy(&bytes);
-            buffer.push_str(&s);
+        while let Some(chunk_res) = stream.next().await {
+            let chunk = chunk_res?;
+            buffer.extend_from_slice(&chunk);
 
-            while let Some(idx) = buffer.find("\n\n") {
-                let packet = buffer.drain(..idx+2).collect::<String>();
+            loop {
+                // Find double newline to separate events
+                let mut found_idx = None;
+                // Simple search
+                for i in 0..buffer.len().saturating_sub(1) {
+                    if buffer[i] == b'\n' && buffer[i+1] == b'\n' {
+                        found_idx = Some(i);
+                        break;
+                    }
+                }
 
-                for line in packet.lines() {
-                    if let Some(data) = line.strip_prefix("data: ") {
-                        if data.trim() == "[DONE]" {
-                            break;
-                        }
-                        if let Ok(chunk) = serde_json::from_str::<OpenAIChatCompletionChunk>(data) {
-                            yield chunk;
+                if let Some(idx) = found_idx {
+                    let packet = buffer.split_to(idx + 2);
+                    // Safe to convert to string here as we expect valid text between boundaries
+                    // But use lossy to be safe against upstream malformed bytes
+                    let s = String::from_utf8_lossy(&packet);
+
+                    for line in s.lines() {
+                        if let Some(data) = line.strip_prefix("data: ") {
+                            let trimmed = data.trim();
+                            if trimmed == "[DONE]" {
+                                break;
+                            }
+                            // Skip empty or keepalive
+                            if trimmed.is_empty() {
+                                continue;
+                            }
+
+                            if let Ok(chunk) = serde_json::from_str::<OpenAIChatCompletionChunk>(trimmed) {
+                                yield chunk;
+                            }
                         }
                     }
+                } else {
+                    break;
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+    use futures::stream;
+
+    #[tokio::test]
+    async fn test_parse_sse_stream_split_utf8() {
+        // "Hello 🌍" -> 🌍 is 4 bytes: F0 9F 8C 8D
+        // We will split the bytes of 🌍 across chunks
+
+        let chunk1 = Bytes::from("data: {\"id\":\"1\",\"object\":\"chunk\",\"created\":123,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello \"}}]}\n\n");
+        // Part of next message: "data: ... content: ... " then start of 🌍
+        let part1 = "data: {\"id\":\"1\",\"object\":\"chunk\",\"created\":123,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"";
+
+        // 🌍 bytes
+        let earth = "🌍";
+        let earth_bytes = earth.as_bytes(); // [240, 159, 140, 141]
+
+        let mut chunk2 = BytesMut::new();
+        chunk2.extend_from_slice(part1.as_bytes());
+        chunk2.extend_from_slice(&earth_bytes[0..2]); // F0 9F
+
+        let mut chunk3 = BytesMut::new();
+        chunk3.extend_from_slice(&earth_bytes[2..4]); // 8C 8D
+        chunk3.extend_from_slice(b"\"}}]}\n\n");
+
+        let chunk4 = Bytes::from("data: [DONE]\n\n");
+
+        let stream = stream::iter(vec![
+            Ok(chunk1),
+            Ok(chunk2.freeze()),
+            Ok(chunk3.freeze()),
+            Ok(chunk4),
+        ]);
+
+        let mut parsed_stream = Box::pin(parse_sse_stream(stream));
+
+        let c1 = parsed_stream.next().await.unwrap().unwrap();
+        assert_eq!(c1.choices[0].delta.content.as_deref(), Some("Hello "));
+
+        // The second message should be fully assembled before parsing
+        let c2 = parsed_stream.next().await.unwrap().unwrap();
+        assert_eq!(c2.choices[0].delta.content.as_deref(), Some("🌍"));
+
+        assert!(parsed_stream.next().await.is_none());
     }
 }

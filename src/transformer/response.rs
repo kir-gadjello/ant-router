@@ -156,8 +156,9 @@ where
                         let delta = &choice.delta;
 
                         // 1. Handle Reasoning (Thinking)
-                        if let Some(reasoning) = &delta.reasoning {
-                            if !reasoning.is_empty() {
+                        let reasoning = delta.reasoning.as_deref().or(delta.reasoning_content.as_deref());
+                        if let Some(r_text) = reasoning {
+                            if !r_text.is_empty() {
                                 if state.active_block_type != Some(BlockType::Thinking) {
                                     // Close previous blocks
                                     for idx in state.open_block_indices.drain() {
@@ -185,7 +186,7 @@ where
                                 yield Ok(AnthropicStreamEvent::ContentBlockDelta {
                                     index: state.block_index,
                                     delta: AnthropicDelta::ThinkingDelta {
-                                        thinking: reasoning.clone(),
+                                        thinking: r_text.to_string(),
                                     },
                                 });
                             }
