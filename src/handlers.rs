@@ -35,17 +35,75 @@ pub async fn handle_messages(
 ) -> impl IntoResponse {
     let _start = std::time::Instant::now();
 
-    // 1. Resolve Model
+    // 1. Detect Vision Requirements
+    let has_images = payload.messages.iter().any(|m| match &m.content {
+        AnthropicMessageContent::Blocks(blocks) => blocks
+            .iter()
+            .any(|b| matches!(b, AnthropicContentBlock::Image { .. })),
+        _ => false,
+    });
+
     let thinking_enabled = payload.thinking.is_some();
-    let upstream_model = state.config.resolve_model(&payload.model, thinking_enabled);
+
+    // 2. Resolve Model ID (The logical ID from config, not yet the wire ID)
+    // We first check if we need to route based on vision capabilities
+    let target_model_id = if has_images {
+        if thinking_enabled {
+            state
+                .config
+                .ant_vision_reasoning_model
+                .as_deref()
+                .or(state.config.ant_vision_model.as_deref())
+                .unwrap_or(&payload.model) // Fallback to requested model
+        } else {
+            state
+                .config
+                .ant_vision_model
+                .as_deref()
+                .unwrap_or(&payload.model)
+        }
+    } else {
+        // Standard resolution logic
+        // If the requested model exists in our config, use it directly (alias or key)
+        // Otherwise, fall back to the legacy "profile/rule" resolution which returns a wire ID string.
+
+        // Wait, `resolve_model` currently returns a String (wire ID).
+        // We need to bridge the new config system with the old one.
+        // If we find a UMCP model, use its ID.
+        // If not, use legacy resolution.
+
+        if let Some(_model_conf) = state.config.resolve_model_alias(&payload.model) {
+            // It's a UMCP model, we'll process it later
+            &payload.model
+        } else {
+            // It might be a pattern match from legacy profiles, or just pass-through
+            &payload.model
+        }
+    }
+    .to_string();
+
+    // 3. Resolve Final Configuration (Wire ID + Params)
+    // Try to find the UMCP configuration for the target ID
+    let (wire_model, api_params) =
+        if let Some(model_conf) = state.config.resolve_model_alias(&target_model_id) {
+            // Found a UMCP model config
+            let wire_id = state.config.get_wire_model_id(model_conf);
+            (wire_id, model_conf.api_params.clone())
+        } else {
+            // Fallback to legacy resolution
+            let wire_id = state
+                .config
+                .resolve_model(&target_model_id, thinking_enabled);
+            (wire_id, None)
+        };
 
     info!(
-        "Request for model '{}' (thinking={}) resolved to '{}'",
-        payload.model, thinking_enabled, upstream_model
+        "Request for '{}' (thinking={}, vision={}) -> UMCP ID '{}' -> Wire '{}'",
+        payload.model, thinking_enabled, has_images, target_model_id, wire_model
     );
 
-    // 2. Transform Request
-    let openai_req = match convert_request(payload.clone(), upstream_model.clone()) {
+    // 4. Transform Request
+    let openai_req = match convert_request(payload.clone(), wire_model.clone()) {
         Ok(req) => req,
         Err(e) => {
             error!("Failed to convert request: {}", e);
@@ -57,24 +115,59 @@ pub async fn handle_messages(
         }
     };
 
-    // 3. Prepare Upstream Request
+    // Apply UMCP API Params (Extra Body)
+    if let Some(_params) = &api_params {
+        // Merge extra_body into request.
+        // OpenAIChatCompletionRequest doesn't have a catch-all field easily accessible for serde serialization
+        // unless we use a custom serializer or serialize to Value first.
+        // Let's serialize to Value, merge, then we can send that.
+        // Note: reqwest .json() takes any Serialize.
+        // So we can just merge into a Value.
+    }
+
+    // 5. Prepare Upstream Request
     let url = format!("{}/v1/chat/completions", state.base_url);
-    let mut req_builder = state.client.post(&url).json(&openai_req);
+
+    // Determine Auth (Provider specific or Global)
+    // In UMCP, models have providers. We should ideally resolve the provider config.
+    // For now, we stick to the global client/auth unless overridden?
+    // The spec says "Providers: Abstract the connection details".
+    // We haven't implemented full provider resolution in the client construction yet (Client is global).
+    // We will stick to global auth for this iteration unless `api_key` is overridden in params (not spec'd).
+
+    let mut req_builder = state.client.post(&url);
 
     if let Some(key) = &state.api_key {
         req_builder = req_builder.header("Authorization", format!("Bearer {}", key));
     }
 
-    // Pass through some headers if needed, or just standard ones?
-    // Spec doesn't specify passing headers, but usually good practice to pass Trace IDs.
-    // For now, minimal headers.
+    // Apply headers from UMCP params
+    if let Some(params) = &api_params {
+        for (k, v) in &params.headers {
+            req_builder = req_builder.header(k, v);
+        }
+    }
+
+    // Merge Body
+    let mut final_body = serde_json::to_value(&openai_req).unwrap();
+    if let Some(params) = &api_params {
+        if !params.extra_body.is_empty() {
+            if let Value::Object(ref mut map) = final_body {
+                for (k, v) in &params.extra_body {
+                    map.insert(k.clone(), v.clone());
+                }
+            }
+        }
+    }
+
+    req_builder = req_builder.json(&final_body);
 
     // Debug logging
     if env::var("DEBUG").is_ok() {
-        debug!("Upstream Request: {:?}", openai_req);
+        debug!("Upstream Request Body: {:?}", final_body);
     }
 
-    // 4. Send Request
+    // 6. Send Request
     let response = match req_builder.send().await {
         Ok(res) => res,
         Err(e) => {
@@ -91,13 +184,12 @@ pub async fn handle_messages(
         let status = response.status();
         let error_text = response.text().await.unwrap_or_default();
         error!("Upstream error {}: {}", status, error_text);
-        // Try to parse error as JSON to return cleanly, else text
         let error_body =
             serde_json::from_str::<Value>(&error_text).unwrap_or(json!({"error": error_text}));
         return (status, Json(error_body)).into_response();
     }
 
-    // 5. Handle Response
+    // 7. Handle Response
     if payload.stream == Some(true) {
         let stream = response.bytes_stream();
 
@@ -108,7 +200,6 @@ pub async fn handle_messages(
         let sse_stream = Box::pin(anthropic_stream.map(|res| {
             match res {
                 Ok(event) => {
-                    // Extract event type for the `event: ` line
                     let event_type = get_event_type(&event);
                     Event::default().event(event_type).json_data(event)
                 }
@@ -194,8 +285,6 @@ where
 
                 if let Some(idx) = found_idx {
                     let packet = buffer.split_to(idx + 2);
-                    // Safe to convert to string here as we expect valid text between boundaries
-                    // But use lossy to be safe against upstream malformed bytes
                     let s = String::from_utf8_lossy(&packet);
 
                     for line in s.lines() {
@@ -204,7 +293,6 @@ where
                             if trimmed == "[DONE]" {
                                 break;
                             }
-                            // Skip empty or keepalive
                             if trimmed.is_empty() {
                                 continue;
                             }

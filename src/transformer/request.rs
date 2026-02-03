@@ -14,7 +14,7 @@ pub fn convert_request(
             SystemPrompt::String(s) => {
                 openai_messages.push(OpenAIMessage {
                     role: "system".to_string(),
-                    content: Some(s),
+                    content: Some(OpenAIContent::String(s)),
                     name: None,
                     tool_calls: None,
                     tool_call_id: None,
@@ -25,7 +25,7 @@ pub fn convert_request(
                     if block.r#type == "text" {
                         openai_messages.push(OpenAIMessage {
                             role: "system".to_string(),
-                            content: Some(block.text),
+                            content: Some(OpenAIContent::String(block.text)),
                             name: None,
                             tool_calls: None,
                             tool_call_id: None,
@@ -42,14 +42,14 @@ pub fn convert_request(
             AnthropicMessageContent::String(s) => {
                 openai_messages.push(OpenAIMessage {
                     role: msg.role,
-                    content: Some(s),
+                    content: Some(OpenAIContent::String(s)),
                     name: None,
                     tool_calls: None,
                     tool_call_id: None,
                 });
             }
             AnthropicMessageContent::Blocks(blocks) => {
-                // Separate blocks into tool_results and others (text/tool_use)
+                // Separate blocks into tool_results and others (text/image/tool_use)
                 let mut tool_results = Vec::new();
                 let mut other_blocks = Vec::new();
 
@@ -60,7 +60,7 @@ pub fn convert_request(
                     }
                 }
 
-                // 2a. Process Tool Results FIRST (as separate messages)
+                // 2a. Process Tool Results FIRST
                 for tr in tool_results {
                     if let AnthropicContentBlock::ToolResult {
                         tool_use_id,
@@ -69,13 +69,13 @@ pub fn convert_request(
                     } = tr
                     {
                         let content_str = match content {
-                            Some(c) => normalize_content(c).unwrap_or_default(),
+                            Some(c) => normalize_content_to_string(c).unwrap_or_default(),
                             None => "".to_string(),
                         };
 
                         openai_messages.push(OpenAIMessage {
                             role: "tool".to_string(),
-                            content: Some(content_str),
+                            content: Some(OpenAIContent::String(content_str)),
                             name: None,
                             tool_calls: None,
                             tool_call_id: Some(tool_use_id),
@@ -83,15 +83,26 @@ pub fn convert_request(
                     }
                 }
 
-                // 2b. Process Remaining Content (Text & Tool Use)
+                // 2b. Process Remaining Content
                 if !other_blocks.is_empty() {
-                    let mut text_parts = Vec::new();
+                    let mut content_parts = Vec::new();
                     let mut tool_calls = Vec::new();
 
                     for block in other_blocks {
                         match block {
                             AnthropicContentBlock::Text { text } => {
-                                text_parts.push(text);
+                                content_parts.push(OpenAIContentPart::Text { text });
+                            }
+                            AnthropicContentBlock::Image { source } => {
+                                // Convert Anthropic image to OpenAI image_url
+                                let data_uri =
+                                    format!("data:{};base64,{}", source.media_type, source.data);
+                                content_parts.push(OpenAIContentPart::ImageUrl {
+                                    image_url: OpenAIImageUrl {
+                                        url: data_uri,
+                                        detail: Some("auto".to_string()),
+                                    },
+                                });
                             }
                             AnthropicContentBlock::ToolUse { id, name, input } => {
                                 tool_calls.push(OpenAIToolCall {
@@ -108,24 +119,27 @@ pub fn convert_request(
                                 thinking,
                                 signature: _,
                             } => {
-                                // For now, we might just append thinking to text or ignore.
-                                // Spec doesn't explicitly say how to handle thinking in REQUEST (Anthropic -> OpenAI).
-                                // Usually clients don't send thinking, they receive it.
-                                // But if they do (e.g. prefill assistant?), we might want to include it.
-                                // Let's append to text for now as a fallback.
-                                text_parts.push(format!("<thinking>{}</thinking>", thinking));
-                            }
-                            AnthropicContentBlock::RedactedThinking { .. } => {
-                                // Ignore
+                                content_parts.push(OpenAIContentPart::Text {
+                                    text: format!("<thinking>{}</thinking>", thinking),
+                                });
                             }
                             _ => {}
                         }
                     }
 
-                    let final_content = if text_parts.is_empty() {
+                    // Determine final content structure (String vs Array)
+                    let final_content = if content_parts.is_empty() {
                         None
+                    } else if content_parts.len() == 1 {
+                        // Optimization: if just one text part, verify if we can send as string
+                        match &content_parts[0] {
+                            OpenAIContentPart::Text { text } => {
+                                Some(OpenAIContent::String(text.clone()))
+                            }
+                            _ => Some(OpenAIContent::Array(content_parts)),
+                        }
                     } else {
-                        Some(text_parts.join("\n\n"))
+                        Some(OpenAIContent::Array(content_parts))
                     };
 
                     let final_tool_calls = if tool_calls.is_empty() {
@@ -134,7 +148,6 @@ pub fn convert_request(
                         Some(tool_calls)
                     };
 
-                    // Only push if we have something
                     if final_content.is_some() || final_tool_calls.is_some() {
                         openai_messages.push(OpenAIMessage {
                             role: msg.role.clone(),
@@ -195,13 +208,14 @@ pub fn convert_request(
         max_tokens: req.max_tokens,
         tools: openai_tools,
         tool_choice,
-        presence_penalty: None,  // Not mapped
-        frequency_penalty: None, // Not mapped
+        presence_penalty: None,
+        frequency_penalty: None,
         user: None,
     })
 }
 
-fn normalize_content(content: AnthropicMessageContent) -> Option<String> {
+// Helper: Normalize to string for Tool Result content (which is typically just text/json)
+fn normalize_content_to_string(content: AnthropicMessageContent) -> Option<String> {
     match content {
         AnthropicMessageContent::String(s) => Some(s),
         AnthropicMessageContent::Blocks(blocks) => {
@@ -209,7 +223,7 @@ fn normalize_content(content: AnthropicMessageContent) -> Option<String> {
                 .iter()
                 .filter_map(|b| match b {
                     AnthropicContentBlock::Text { text } => Some(text.clone()),
-                    _ => None,
+                    _ => None, // Tool results usually don't have images
                 })
                 .collect();
 
@@ -225,8 +239,6 @@ fn normalize_content(content: AnthropicMessageContent) -> Option<String> {
 fn remove_uri_format(schema: &mut Value) {
     match schema {
         Value::Object(map) => {
-            // Check if we need to remove format: uri
-            // Condition: type string AND format uri
             let is_string = map.get("type").and_then(|v| v.as_str()) == Some("string");
             let is_uri = map.get("format").and_then(|v| v.as_str()) == Some("uri");
 
@@ -234,7 +246,6 @@ fn remove_uri_format(schema: &mut Value) {
                 map.remove("format");
             }
 
-            // Recurse
             for (_, v) in map.iter_mut() {
                 remove_uri_format(v);
             }
