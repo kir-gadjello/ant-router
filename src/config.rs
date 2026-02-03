@@ -118,8 +118,29 @@ pub struct ModelConfig {
     #[serde(default)]
     pub force_reasoning: Option<ReasoningConfig>,
 
+    /// Override or set default max_tokens for this model.
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+
+    // Request Preprocessing Options
+    #[serde(default)]
+    pub preprocess: Option<PreprocessConfig>,
+
     #[serde(default)]
     pub api_params: Option<ApiParams>,
+}
+
+#[derive(Debug, Deserialize, Clone, Serialize, Default)]
+pub struct PreprocessConfig {
+    #[serde(default)]
+    pub merge_system_messages: Option<bool>,
+    #[serde(default)]
+    pub sanitize_tool_history: Option<bool>,
+    /// Cap output tokens. Use "auto" to use model default, or a number.
+    #[serde(default)]
+    pub max_output_tokens: Option<Value>,
+    #[serde(default)]
+    pub max_output_cap: Option<u32>, // Deprecated in favor of max_output_tokens, but keeping for compatibility if used
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
@@ -298,7 +319,26 @@ fn merge_models(parent: ModelConfig, child: ModelConfig) -> ModelConfig {
         capabilities: merge_capabilities(parent.capabilities, child.capabilities),
         min_reasoning: child.min_reasoning.or(parent.min_reasoning),
         force_reasoning: child.force_reasoning.or(parent.force_reasoning),
+        max_tokens: child.max_tokens.or(parent.max_tokens),
+        preprocess: merge_preprocess(parent.preprocess, child.preprocess),
         api_params: merge_api_params(parent.api_params, child.api_params),
+    }
+}
+
+fn merge_preprocess(
+    parent: Option<PreprocessConfig>,
+    child: Option<PreprocessConfig>,
+) -> Option<PreprocessConfig> {
+    match (parent, child) {
+        (None, None) => None,
+        (Some(p), None) => Some(p),
+        (None, Some(c)) => Some(c),
+        (Some(p), Some(c)) => Some(PreprocessConfig {
+            merge_system_messages: c.merge_system_messages.or(p.merge_system_messages),
+            sanitize_tool_history: c.sanitize_tool_history.or(p.sanitize_tool_history),
+            max_output_tokens: c.max_output_tokens.or(p.max_output_tokens),
+            max_output_cap: c.max_output_cap.or(p.max_output_cap),
+        }),
     }
 }
 

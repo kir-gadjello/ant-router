@@ -1,13 +1,65 @@
-use crate::config::{ModelConfig, ReasoningConfig};
+use crate::config::{ModelConfig, ReasoningConfig, PreprocessConfig};
 use crate::protocol::*;
 use anyhow::Result;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 
 pub fn convert_request(
-    req: AnthropicMessageRequest,
+    mut req: AnthropicMessageRequest,
     resolved_model: String,
     model_config: Option<&ModelConfig>,
 ) -> Result<OpenAIChatCompletionRequest> {
+    // Preprocessing
+    if let Some(conf) = model_config.and_then(|c| c.preprocess.as_ref()) {
+        preprocess_messages(&mut req, conf);
+        
+        // Max Output Logic
+        
+        // 1. Model Config Override (Highest priority if strictly set in config root, but here we access via conf... wait, max_tokens is on ModelConfig, not PreprocessConfig)
+        // Access model_config directly
+    }
+    
+    if let Some(mc) = model_config {
+        if let Some(override_val) = mc.max_tokens {
+            req.max_tokens = Some(override_val);
+        }
+        
+        if let Some(pp) = &mc.preprocess {
+             // 2. Max Output Tokens Policy
+             if let Some(policy) = &pp.max_output_tokens {
+                 match policy {
+                     Value::String(s) if s == "auto" => {
+                         req.max_tokens = None;
+                     },
+                     Value::Number(n) => {
+                         if let Some(u) = n.as_u64() {
+                             req.max_tokens = Some(u as u32);
+                         }
+                     },
+                     _ => {}
+                 }
+             } else if let Some(legacy_cap) = pp.max_output_cap {
+                 // Legacy Cap (only caps if current is higher)
+                 if let Some(current) = req.max_tokens {
+                     if current > legacy_cap {
+                         req.max_tokens = Some(legacy_cap);
+                     }
+                 }
+             }
+             
+             // 3. Cap (Applied even if policy set number? Yes, safety)
+             // If policy was "auto" (None), cap doesn't apply (unknown).
+             // If policy set a Number, we check cap.
+             if let Some(cap) = pp.max_output_cap {
+                 if let Some(current) = req.max_tokens {
+                     if current > cap {
+                         req.max_tokens = Some(cap);
+                     }
+                 }
+             }
+        }
+    }
+
     let mut openai_messages = Vec::new();
 
     // 1. Handle System Messages
@@ -39,8 +91,8 @@ pub fn convert_request(
             }
         }
     }
-
-    // 2. Process Messages (Transformation & Tool Result Processing)
+    
+    // ... rest of convert_request ...
     for msg in req.messages {
         match msg.content {
             AnthropicMessageContent::String(s) => {
@@ -268,6 +320,68 @@ pub fn convert_request(
         user: None,
         reasoning,
     })
+}
+
+fn preprocess_messages(req: &mut AnthropicMessageRequest, config: &PreprocessConfig) {
+    // 1. Merge System Messages
+    if config.merge_system_messages == Some(true) {
+        if let Some(SystemPrompt::Array(blocks)) = &mut req.system {
+            let mut merged_text = String::new();
+            for block in blocks.iter() {
+                if !merged_text.is_empty() {
+                    merged_text.push_str("\n\n");
+                }
+                merged_text.push_str(&block.text);
+            }
+            req.system = Some(SystemPrompt::String(merged_text));
+        }
+    }
+
+    // 2. Sanitize Tool History
+    if config.sanitize_tool_history == Some(true) {
+        let mut removed_tool_ids = HashSet::new();
+
+        // Pass 1: Identify invalid tool uses in Assistant messages
+        for msg in &mut req.messages {
+            if msg.role == "assistant" {
+                if let AnthropicMessageContent::Blocks(blocks) = &mut msg.content {
+                    blocks.retain(|block| {
+                        if let AnthropicContentBlock::ToolUse { id, name, .. } = block {
+                            if name.is_empty() {
+                                removed_tool_ids.insert(id.clone());
+                                return false; // Remove
+                            }
+                        }
+                        true // Keep
+                    });
+                }
+            }
+        }
+
+        // Pass 2: Remove orphaned Tool Results
+        if !removed_tool_ids.is_empty() {
+            for msg in &mut req.messages {
+                if let AnthropicMessageContent::Blocks(blocks) = &mut msg.content {
+                    blocks.retain(|block| {
+                        if let AnthropicContentBlock::ToolResult { tool_use_id, .. } = block {
+                            if removed_tool_ids.contains(tool_use_id) {
+                                return false;
+                            }
+                        }
+                        true
+                    });
+                }
+            }
+            
+            // Remove empty messages resulting from filtering
+            req.messages.retain(|msg| {
+                match &msg.content {
+                    AnthropicMessageContent::Blocks(blocks) => !blocks.is_empty(),
+                    AnthropicMessageContent::String(s) => !s.is_empty(),
+                }
+            });
+        }
+    }
 }
 
 // Helper: Normalize to string for Tool Result content (which is typically just text/json)

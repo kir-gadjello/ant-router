@@ -15,7 +15,7 @@
 # Server Configuration
 # ----------------------------------------------------------------------------------
 server:
-  host: "0.0.0.0"
+  host: "127.0.0.1"
   port: 3000
 
 # ----------------------------------------------------------------------------------
@@ -68,17 +68,41 @@ models:
     extends: _base_openrouter
     api_model_id: "stepfun/step-3.5-flash:free"
     aliases: ["step-3.5-flash"]
-
-  # Gemini Models
-  "gemini-pro-exp":
-    extends: _base_openrouter
-    api_model_id: "google/gemini-2.0-pro-exp-02-05:free"
-    aliases: ["gemini-2.0-pro"]
+    
+    # Force reasoning: ensures reasoning is enabled with a specific effort level.
+    # Supported values: true (default low), false (none), "low", "medium", "high", or integer (token budget).
+    force_reasoning: high
+    
+    capabilities:
+      reasoning: true
+    
+    # Preprocessing options to fix upstream compatibility issues
+    preprocess:
+      # Merges multiple system messages into one (needed for some providers)
+      merge_system_messages: true
+      # Filters out tool calls with empty names and deduplicates tool IDs
+      sanitize_tool_history: true
+      # Caps the maximum output tokens to a safe limit (or use "auto" to unset it)
+      max_output_tokens: "auto"
 
   # Vision Models (Z-AI GLM)
   "glm-4d6-v":
     extends: _base_openrouter
     api_model_id: "z-ai/glm-4.6v"
+    capabilities:
+      vision: true
+      reasoning: true
+
+  # Grok 4.1 Fast (Example of Min Reasoning)
+  "grok41fast":
+    extends: _base_openrouter
+    api_model_id: "x-ai/grok-4.1-fast"
+    aliases: ["grok-4.1-fast"]
+    
+    # Min Reasoning: ensures reasoning is enabled if client doesn't request it.
+    # If client requests budget < min, it upgrades it.
+    min_reasoning: true
+    
     capabilities:
       vision: true
       reasoning: true
@@ -95,7 +119,7 @@ profiles:
   # Profile: Stepfun Flash (Free) with GLM vision fallback
   stepfun:
     rules:
-      # If request needs vision (or vision+reasoning), route to GLM
+      # If request needs vision, route to GLM
       - pattern: ".*"
         match_features: ["vision"]
         target: "glm-4d6-v"
@@ -103,10 +127,9 @@ profiles:
       # Default catch-all
       - pattern: ".*"
         target: "stepfun-flash"
-        # Optional: reasoning_target: "stepfun-flash"
 
-  # Profile: Maps everything to Google's Gemini 2.0 Pro (Free)
-  gemini_free:
+  # Profile: Grok 4.1 Fast
+  grok41fast:
     rules:
       - pattern: ".*"
-        target: "gemini-pro-exp"
+        target: "grok41fast"
