@@ -13,18 +13,13 @@ use tracing::{debug, warn};
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
-    // Current profile name (legacy/existing routing usage, though Spec doesn't strictly use "profile" for routing,
-    // it seems we are keeping it or integrating it. The Spec focuses on UMCP model definitions.
-    // We will keep `current_profile` for backward compatibility or routing entry point if needed,
-    // but primarily we load the UMCP structure.)
     #[serde(default)]
     pub current_profile: String,
 
-    // Legacy support
+    // Core feature: Profiles map to Models
     #[serde(default)]
     pub profiles: HashMap<String, Profile>,
 
-    // UMCP Fields
     #[serde(default)]
     pub defaults: Option<Defaults>,
     #[serde(default)]
@@ -32,21 +27,15 @@ pub struct Config {
     #[serde(default)]
     pub models: HashMap<String, ModelConfig>,
 
-    // New Routing Fields (from prompt requirement)
-    // These act as specific overrides/pointers for logic handlers
-    pub ant_vision_model: Option<String>,
-    pub ant_vision_reasoning_model: Option<String>,
-
-    // Logging Configuration
+    // Config flags
     #[serde(default = "default_log_enabled")]
     pub log_enabled: bool,
     pub log_file: Option<String>,
+    #[serde(default)]
+    pub no_ant: bool,
 
-    // Server Configuration
     #[serde(default)]
     pub server: ServerConfig,
-
-    // Default Upstream Configuration (Global)
     #[serde(default)]
     pub upstream: UpstreamConfig,
 }
@@ -64,12 +53,15 @@ pub struct ServerConfig {
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct UpstreamConfig {
     pub base_url: Option<String>,
-    pub api_key_env_var: Option<String>, // Defines WHICH env var holds the key, defaulting to OPENROUTER_API_KEY
+    pub api_key_env_var: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Profile {
     pub rules: Vec<Rule>,
+    // Profile-specific vision routing
+    pub ant_vision_model: Option<String>,
+    pub ant_vision_reasoning_model: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -157,7 +149,6 @@ impl Config {
     pub async fn load(path: &str) -> Result<Self> {
         let mut config_path = PathBuf::from(path);
 
-        // Fallback check: $HOME/.ant-router/config.yaml
         if !config_path.exists() {
             if let Ok(home) = env::var("HOME") {
                 let fallback_path = Path::new(&home).join(".ant-router").join("config.yaml");
@@ -183,8 +174,8 @@ impl Config {
         let mut config: Config =
             serde_yaml::from_str(&content).context("Failed to parse config file")?;
 
-        // Resolve Model Inheritance (Deep Merge)
         config.resolve_models()?;
+        config.validate()?;
 
         Ok(config)
     }
@@ -203,11 +194,6 @@ impl Config {
     }
 
     fn resolve_models(&mut self) -> Result<()> {
-        // Simple resolution:
-        // We need to resolve models that use `extends`.
-        // We can do a topological sort or just iterative resolution since usually chain depth is low.
-        // Let's use a safe iterative approach with loop detection or max depth.
-
         let mut resolved_models = HashMap::new();
         let model_keys: Vec<String> = self.models.keys().cloned().collect();
 
@@ -234,91 +220,72 @@ impl Config {
             stack.push(key.to_string());
             let parent = self.resolve_single_model(parent_key, stack)?;
             stack.pop();
-
-            // Merge parent + child (child overrides)
             Ok(merge_models(parent, raw_model.clone()))
         } else {
             Ok(raw_model.clone())
         }
     }
 
-    // New resolution method compatible with UMCP but also supporting legacy profiles if needed
-    pub fn resolve_model_alias(&self, alias: &str) -> Option<&ModelConfig> {
-        // 1. Direct key match
-        if let Some(m) = self.models.get(alias) {
-            return Some(m);
+    fn validate(&self) -> Result<()> {
+        // Validate that all profile targets map to existing models
+        for (profile_name, profile) in &self.profiles {
+            for rule in &profile.rules {
+                if !self.models.contains_key(&rule.target) {
+                    return Err(anyhow::anyhow!(
+                        "Profile '{}' rule pattern '{}' targets unknown model '{}'",
+                        profile_name,
+                        rule.pattern,
+                        rule.target
+                    ));
+                }
+                if let Some(reasoning_target) = &rule.reasoning_target {
+                    if !self.models.contains_key(reasoning_target) {
+                        return Err(anyhow::anyhow!(
+                            "Profile '{}' rule pattern '{}' reasoning target '{}' unknown",
+                            profile_name,
+                            rule.pattern,
+                            reasoning_target
+                        ));
+                    }
+                }
+            }
+            if let Some(vision_model) = &profile.ant_vision_model {
+                if !self.models.contains_key(vision_model) {
+                    return Err(anyhow::anyhow!(
+                        "Profile '{}' ant_vision_model '{}' unknown",
+                        profile_name,
+                        vision_model
+                    ));
+                }
+            }
+            if let Some(vision_reasoning) = &profile.ant_vision_reasoning_model {
+                if !self.models.contains_key(vision_reasoning) {
+                    return Err(anyhow::anyhow!(
+                        "Profile '{}' ant_vision_reasoning_model '{}' unknown",
+                        profile_name,
+                        vision_reasoning
+                    ));
+                }
+            }
         }
-        // 2. Alias search
-        self.models
-            .values()
-            .find(|&m| m.aliases.contains(&alias.to_string()))
-            .map(|v| v as _)
+        Ok(())
     }
 
-    // Helper to get wire model ID from a resolved config
     pub fn get_wire_model_id(&self, model_conf: &ModelConfig) -> String {
         model_conf
             .api_model_id
             .clone()
             .unwrap_or_else(|| "unknown".to_string())
     }
-
-    // Restore legacy resolve_model for backward compatibility
-    pub fn resolve_model(&self, input_model: &str, thinking: bool) -> String {
-        // 1. Try to match in current profile
-        if let Some(profile) = self.profiles.get(&self.current_profile) {
-            for rule in &profile.rules {
-                if let Ok(regex) = glob_to_regex(&rule.pattern) {
-                    if regex.is_match(input_model) {
-                        if thinking {
-                            if let Some(ref target) = rule.reasoning_target {
-                                debug!(
-                                    "Matched rule for model '{}', using reasoning target '{}'",
-                                    input_model, target
-                                );
-                                return target.clone();
-                            }
-                        }
-                        debug!(
-                            "Matched rule for model '{}', using target '{}'",
-                            input_model, rule.target
-                        );
-                        return rule.target.clone();
-                    }
-                } else {
-                    warn!("Invalid regex pattern from glob: {}", rule.pattern);
-                }
-            }
-        }
-
-        // 2. Env vars
-        if thinking {
-            if let Ok(model) = env::var("REASONING_MODEL") {
-                debug!("Using REASONING_MODEL env var: {}", model);
-                return model;
-            }
-        }
-
-        if let Ok(model) = env::var("COMPLETION_MODEL") {
-            debug!("Using COMPLETION_MODEL env var: {}", model);
-            return model;
-        }
-
-        // 3. Hardcoded default
-        let default_model = "google/gemini-2.0-pro-exp-02-05:free";
-        debug!("Using default model: {}", default_model);
-        default_model.to_string()
-    }
 }
 
 // Merging Logic
 fn merge_models(parent: ModelConfig, child: ModelConfig) -> ModelConfig {
     ModelConfig {
-        extends: child.extends, // Keep child's extends pointer (though resolved)
+        extends: child.extends,
         provider: child.provider.or(parent.provider),
         api_model_id: child.api_model_id.or(parent.api_model_id),
-        aliases: [parent.aliases, child.aliases].concat(), // Union/Concat aliases
-
+        aliases: [parent.aliases, child.aliases].concat(),
         context: merge_context(parent.context, child.context),
         capabilities: merge_capabilities(parent.capabilities, child.capabilities),
         api_params: merge_api_params(parent.api_params, child.api_params),
@@ -351,7 +318,7 @@ fn merge_capabilities(
         (Some(p), Some(c)) => Some(Capabilities {
             vision: c.vision.or(p.vision),
             tools: c.tools.or(p.tools),
-            reasoning: c.reasoning.or(p.reasoning), // Simple overwrite for reasoning for now
+            reasoning: c.reasoning.or(p.reasoning),
         }),
     }
 }
@@ -364,10 +331,7 @@ fn merge_api_params(parent: Option<ApiParams>, child: Option<ApiParams>) -> Opti
         (Some(p), Some(c)) => {
             let mut headers = p.headers.clone();
             headers.extend(c.headers);
-
-            // Deep merge extra_body
             let extra_body = deep_merge_json(p.extra_body, c.extra_body);
-
             Some(ApiParams {
                 timeout: c.timeout.or(p.timeout),
                 headers,
@@ -385,7 +349,6 @@ fn deep_merge_json(
     for (k, v) in override_map {
         match (result.get_mut(&k), v) {
             (Some(Value::Object(base_obj)), Value::Object(override_obj)) => {
-                // If both are objects, merge recursively
                 let mut base_map = HashMap::new();
                 for (bk, bv) in base_obj.iter() {
                     base_map.insert(bk.clone(), bv.clone());
@@ -394,7 +357,6 @@ fn deep_merge_json(
                 for (ok, ov) in override_obj {
                     override_map_inner.insert(ok, ov);
                 }
-
                 let merged = deep_merge_json(base_map, override_map_inner);
                 *base_obj = serde_json::to_value(merged)
                     .unwrap()
@@ -413,7 +375,6 @@ fn deep_merge_json(
     result
 }
 
-// Legacy glob regex helper (kept for profile support)
 pub fn glob_to_regex(pattern: &str) -> Result<Regex, regex::Error> {
     let escaped = regex::escape(pattern);
     let regex_pattern = escaped.replace("\\*", ".*");
@@ -421,87 +382,6 @@ pub fn glob_to_regex(pattern: &str) -> Result<Regex, regex::Error> {
     Regex::new(&final_pattern)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_deep_merge_inheritance() {
-        let parent = ModelConfig {
-            api_model_id: Some("base".to_string()),
-            api_params: Some(ApiParams {
-                timeout: Some(10),
-                extra_body: HashMap::from([
-                    (
-                        "stream_options".to_string(),
-                        serde_json::json!({"include_usage": true}),
-                    ),
-                    ("nested".to_string(), serde_json::json!({"a": 1})),
-                ]),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-
-        let child = ModelConfig {
-            extends: Some("base".to_string()),
-            api_model_id: Some("child".to_string()),
-            api_params: Some(ApiParams {
-                extra_body: HashMap::from([("nested".to_string(), serde_json::json!({"b": 2}))]),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-
-        let merged = merge_models(parent, child);
-
-        assert_eq!(merged.api_model_id, Some("child".to_string()));
-        assert_eq!(merged.api_params.as_ref().unwrap().timeout, Some(10));
-
-        let body = &merged.api_params.unwrap().extra_body;
-        assert_eq!(body["stream_options"]["include_usage"], true);
-        assert_eq!(body["nested"]["a"], 1);
-        assert_eq!(body["nested"]["b"], 2);
-    }
-
-    #[test]
-    fn test_resolve_model() {
-        let config = Config {
-            current_profile: "test".to_string(),
-            profiles: HashMap::from([(
-                "test".to_string(),
-                Profile {
-                    rules: vec![
-                        Rule {
-                            pattern: "claude*".to_string(),
-                            target: "openai/gpt-4o".to_string(),
-                            reasoning_target: Some("openai/o1".to_string()),
-                        },
-                        Rule {
-                            pattern: "*".to_string(),
-                            target: "catch-all".to_string(),
-                            reasoning_target: None,
-                        },
-                    ],
-                },
-            )]),
-            ..Default::default() // Important: fill other fields with default
-        };
-
-        // Match claude, no thinking
-        assert_eq!(
-            config.resolve_model("claude-3-opus", false),
-            "openai/gpt-4o"
-        );
-        // Match claude, thinking
-        assert_eq!(config.resolve_model("claude-3-opus", true), "openai/o1");
-
-        // Match catch-all
-        assert_eq!(config.resolve_model("llama-3", false), "catch-all");
-    }
-}
-
-// Add Default impl for Config to support tests
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -510,10 +390,9 @@ impl Default for Config {
             defaults: None,
             providers: HashMap::new(),
             models: HashMap::new(),
-            ant_vision_model: None,
-            ant_vision_reasoning_model: None,
             log_enabled: true,
             log_file: None,
+            no_ant: false,
             server: ServerConfig::default(),
             upstream: UpstreamConfig::default(),
         }

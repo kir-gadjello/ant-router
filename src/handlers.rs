@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::config::{Config, glob_to_regex};
 use crate::logging::log_request;
 use crate::protocol::*;
 use crate::transformer::{convert_request, convert_response, convert_stream};
@@ -39,9 +39,6 @@ pub async fn handle_messages(
     // 0. Logging
     if state.config.log_enabled {
         let log_path = state.config.get_log_path();
-        // Log asynchronously/non-blocking ideally, but for now blocking IO is simple and acceptable for this task
-        // as per "I trust your engineering intuition".
-        // To be strictly async, we'd spawn_blocking.
         let payload_clone = payload.clone();
         tokio::task::spawn_blocking(move || {
             if let Err(e) = log_request(&payload_clone, &log_path) {
@@ -60,53 +57,67 @@ pub async fn handle_messages(
 
     let thinking_enabled = payload.thinking.is_some();
 
-    // 2. Resolve Model ID (The logical ID from config, not yet the wire ID)
-    // We first check if we need to route based on vision capabilities
-    let target_model_id = if has_images {
-        if thinking_enabled {
-            state
-                .config
-                .ant_vision_reasoning_model
-                .as_deref()
-                .or(state.config.ant_vision_model.as_deref())
-                .unwrap_or(&payload.model) // Fallback to requested model
-        } else {
-            state
-                .config
-                .ant_vision_model
-                .as_deref()
-                .unwrap_or(&payload.model)
-        }
-    } else {
-        // Standard resolution logic
-        if let Some(_model_conf) = state.config.resolve_model_alias(&payload.model) {
-            // It's a UMCP model
-            &payload.model
-        } else {
-            // It might be a pattern match from legacy profiles, or just pass-through
-            &payload.model
-        }
-    }
-    .to_string();
+    // 2. Resolve Model Configuration
+    // Logic:
+    // a. Get current profile.
+    // b. Determine logical model ID (from vision routing or rules).
+    // c. Lookup ModelConfig from `models` map using logical ID.
 
-    // 3. Resolve Final Configuration (Wire ID + Params)
-    // Try to find the UMCP configuration for the target ID
-    let (wire_model, api_params) =
-        if let Some(model_conf) = state.config.resolve_model_alias(&target_model_id) {
-            // Found a UMCP model config
-            let wire_id = state.config.get_wire_model_id(model_conf);
-            (wire_id, model_conf.api_params.clone())
+    let profile_name = &state.config.current_profile;
+    let profile = match state.config.profiles.get(profile_name) {
+        Some(p) => p,
+        None => {
+            error!("Current profile '{}' not found in config", profile_name);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("Profile '{}' not found", profile_name)})),
+            )
+                .into_response();
+        }
+    };
+
+    let target_logical_id = if has_images {
+        // Vision Routing via Profile
+        let vision_target = if thinking_enabled {
+            profile.ant_vision_reasoning_model.as_ref().or(profile.ant_vision_model.as_ref())
         } else {
-            // Fallback to legacy resolution
-            let wire_id = state
-                .config
-                .resolve_model(&target_model_id, thinking_enabled);
-            (wire_id, None)
+            profile.ant_vision_model.as_ref()
         };
 
+        match vision_target {
+            Some(target) => target.clone(),
+            None => {
+                // Fallback to standard rule matching if no specific vision model defined?
+                // Or assume the requested model supports vision if mapped?
+                // Let's fallback to standard rule matching logic.
+                resolve_via_rules(profile, &payload.model, thinking_enabled)
+            }
+        }
+    } else {
+        resolve_via_rules(profile, &payload.model, thinking_enabled)
+    };
+
+    // Lookup ModelConfig
+    let (wire_model, api_params) = if let Some(model_conf) = state.config.models.get(&target_logical_id) {
+        (state.config.get_wire_model_id(model_conf), model_conf.api_params.clone())
+    } else {
+        // Should not happen if validation passes, but handle safely
+        warn!("Logical model ID '{}' resolved but not found in models definition", target_logical_id);
+        // Fallback: assume target_logical_id IS the wire ID (legacy behavior fallback)
+        (target_logical_id.clone(), None)
+    };
+
+    // 3. Check `no_ant` flag
+    if state.config.no_ant && wire_model.to_lowercase().contains("anthropic") {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "Requests to Anthropic models are forbidden by configuration"})),
+        ).into_response();
+    }
+
     info!(
-        "Request for '{}' (thinking={}, vision={}) -> UMCP ID '{}' -> Wire '{}'",
-        payload.model, thinking_enabled, has_images, target_model_id, wire_model
+        "Request for '{}' (thinking={}, vision={}) -> Logical '{}' -> Wire '{}'",
+        payload.model, thinking_enabled, has_images, target_logical_id, wire_model
     );
 
     // 4. Transform Request
@@ -152,7 +163,6 @@ pub async fn handle_messages(
 
     req_builder = req_builder.json(&final_body);
 
-    // Debug logging
     if env::var("DEBUG").is_ok() {
         debug!("Upstream Request Body: {:?}", final_body);
     }
@@ -186,7 +196,6 @@ pub async fn handle_messages(
         let openai_stream = parse_sse_stream(stream);
         let anthropic_stream = convert_stream(openai_stream);
 
-        // Box::pin to ensure Unpin
         let sse_stream = Box::pin(anthropic_stream.map(|res| {
             match res {
                 Ok(event) => {
@@ -203,7 +212,6 @@ pub async fn handle_messages(
 
         sse.into_response()
     } else {
-        // Non-streaming
         let openai_resp: OpenAIChatCompletionResponse = match response.json().await {
             Ok(r) => r,
             Err(e) => {
@@ -234,6 +242,24 @@ pub async fn handle_messages(
     }
 }
 
+// Helper to resolve model from rules
+fn resolve_via_rules(profile: &crate::config::Profile, input_model: &str, thinking: bool) -> String {
+    for rule in &profile.rules {
+        if let Ok(regex) = glob_to_regex(&rule.pattern) {
+            if regex.is_match(input_model) {
+                if thinking {
+                    if let Some(target) = &rule.reasoning_target {
+                        return target.clone();
+                    }
+                }
+                return rule.target.clone();
+            }
+        }
+    }
+    // Fallback: return input model as is if no rule matches
+    input_model.to_string()
+}
+
 fn get_event_type(event: &AnthropicStreamEvent) -> &'static str {
     match event {
         AnthropicStreamEvent::MessageStart { .. } => "message_start",
@@ -247,7 +273,6 @@ fn get_event_type(event: &AnthropicStreamEvent) -> &'static str {
     }
 }
 
-// Minimal SSE Parser helper
 fn parse_sse_stream<S>(
     byte_stream: S,
 ) -> impl futures::Stream<Item = Result<OpenAIChatCompletionChunk, anyhow::Error>>
@@ -263,9 +288,7 @@ where
             buffer.extend_from_slice(&chunk);
 
             loop {
-                // Find double newline to separate events
                 let mut found_idx = None;
-                // Simple search
                 for i in 0..buffer.len().saturating_sub(1) {
                     if buffer[i] == b'\n' && buffer[i+1] == b'\n' {
                         found_idx = Some(i);
@@ -303,28 +326,22 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytes::Bytes;
     use futures::stream;
+    use bytes::Bytes;
 
     #[tokio::test]
     async fn test_parse_sse_stream_split_utf8() {
-        // "Hello 🌍" -> 🌍 is 4 bytes: F0 9F 8C 8D
-        // We will split the bytes of 🌍 across chunks
-
         let chunk1 = Bytes::from("data: {\"id\":\"1\",\"object\":\"chunk\",\"created\":123,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello \"}}]}\n\n");
-        // Part of next message: "data: ... content: ... " then start of 🌍
         let part1 = "data: {\"id\":\"1\",\"object\":\"chunk\",\"created\":123,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"";
-
-        // 🌍 bytes
         let earth = "🌍";
-        let earth_bytes = earth.as_bytes(); // [240, 159, 140, 141]
+        let earth_bytes = earth.as_bytes();
 
         let mut chunk2 = BytesMut::new();
         chunk2.extend_from_slice(part1.as_bytes());
-        chunk2.extend_from_slice(&earth_bytes[0..2]); // F0 9F
+        chunk2.extend_from_slice(&earth_bytes[0..2]);
 
         let mut chunk3 = BytesMut::new();
-        chunk3.extend_from_slice(&earth_bytes[2..4]); // 8C 8D
+        chunk3.extend_from_slice(&earth_bytes[2..4]);
         chunk3.extend_from_slice(b"\"}}]}\n\n");
 
         let chunk4 = Bytes::from("data: [DONE]\n\n");
@@ -341,7 +358,6 @@ mod tests {
         let c1 = parsed_stream.next().await.unwrap().unwrap();
         assert_eq!(c1.choices[0].delta.content.as_deref(), Some("Hello "));
 
-        // The second message should be fully assembled before parsing
         let c2 = parsed_stream.next().await.unwrap().unwrap();
         assert_eq!(c2.choices[0].delta.content.as_deref(), Some("🌍"));
 
