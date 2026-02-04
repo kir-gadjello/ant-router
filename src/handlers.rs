@@ -1,5 +1,5 @@
 use crate::config::{Config, glob_to_regex};
-use crate::logging::log_request;
+use crate::logging::{log_request, record_interaction};
 use crate::protocol::*;
 use crate::transformer::{convert_request, convert_response, convert_stream};
 use axum::{
@@ -27,6 +27,7 @@ pub struct AppState {
     pub api_key: Option<String>,
     pub verbose: bool,
     pub tool_verbose: bool,
+    pub record: bool,
     pub tools_reported: AtomicBool,
 }
 
@@ -233,6 +234,15 @@ pub async fn handle_messages(
 
     // 7. Handle Response
     if payload.stream == Some(true) {
+        if state.record {
+            let req_clone = payload.clone();
+            tokio::task::spawn_blocking(move || {
+                let placeholder = json!({"stream": true, "note": "Full streaming response capture not implemented in recording"});
+                if let Err(e) = record_interaction(&req_clone, &placeholder) {
+                    warn!("Failed to record streaming interaction: {}", e);
+                }
+            });
+        }
         let stream = response.bytes_stream();
         let openai_stream = parse_sse_stream(stream);
         let anthropic_stream = convert_stream(openai_stream);
@@ -266,7 +276,18 @@ pub async fn handle_messages(
         }
 
         match convert_response(openai_resp) {
-            Ok(anthropic_resp) => (StatusCode::OK, Json(anthropic_resp)).into_response(),
+            Ok(anthropic_resp) => {
+                if state.record {
+                    let req_clone = payload.clone();
+                    let resp_value = serde_json::to_value(&anthropic_resp).unwrap_or(json!({"error": "Failed to serialize response"}));
+                    tokio::task::spawn_blocking(move || {
+                        if let Err(e) = record_interaction(&req_clone, &resp_value) {
+                            warn!("Failed to record interaction: {}", e);
+                        }
+                    });
+                }
+                (StatusCode::OK, Json(anthropic_resp)).into_response()
+            },
             Err(e) => {
                 error!("Failed to convert response: {}", e);
                 (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response()

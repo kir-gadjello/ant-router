@@ -41,6 +41,7 @@ async fn main() -> Result<()> {
     let mut cli_profile = None;
     let mut verbose = false;
     let mut tool_verbose = false;
+    let mut record = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -76,6 +77,9 @@ async fn main() -> Result<()> {
             }
             "-tv" => {
                 tool_verbose = true;
+            }
+            "--record" => {
+                record = true;
             }
             _ => {}
         }
@@ -210,6 +214,7 @@ async fn main() -> Result<()> {
         api_key,
         verbose,
         tool_verbose,
+        record,
         tools_reported: AtomicBool::new(false),
     });
 

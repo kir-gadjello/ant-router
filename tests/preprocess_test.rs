@@ -44,6 +44,7 @@ async fn test_preprocess_merge_sysmsgs() {
         api_key: Some("k".to_string()),
         verbose: true,
         tool_verbose: false,
+        record: false,
         tools_reported: AtomicBool::new(false),
     });
     let app = create_router(state);
@@ -115,6 +116,7 @@ async fn test_preprocess_sanitize_tool_history() {
         api_key: Some("k".to_string()),
         verbose: true,
         tool_verbose: false,
+        record: false,
         tools_reported: AtomicBool::new(false),
     });
     let app = create_router(state);
@@ -229,6 +231,7 @@ async fn test_max_output_cap() {
         api_key: Some("k".to_string()),
         verbose: true,
         tool_verbose: false,
+        record: false,
         tools_reported: AtomicBool::new(false),
     });
     let app = create_router(state);
@@ -287,6 +290,7 @@ async fn test_max_tokens_override() {
         api_key: Some("k".to_string()),
         verbose: true,
         tool_verbose: false,
+        record: false,
         tools_reported: AtomicBool::new(false),
     });
     let app = create_router(state);
@@ -348,6 +352,7 @@ async fn test_max_output_tokens_auto() {
         api_key: Some("k".to_string()),
         verbose: true,
         tool_verbose: false,
+        record: false,
         tools_reported: AtomicBool::new(false),
     });
     let app = create_router(state);
@@ -410,6 +415,7 @@ async fn test_override_max_tokens_auto() {
         api_key: Some("k".to_string()),
         verbose: true,
         tool_verbose: false,
+        record: false,
         tools_reported: AtomicBool::new(false),
     });
     let app = create_router(state);
@@ -468,6 +474,7 @@ async fn test_override_max_tokens_human_readable() {
         api_key: Some("k".to_string()),
         verbose: true,
         tool_verbose: false,
+        record: false,
         tools_reported: AtomicBool::new(false),
     });
     let app = create_router(state);
