@@ -439,3 +439,61 @@ async fn test_override_max_tokens_auto() {
     
     assert_eq!(r.max_tokens, Some(123));
 }
+
+#[tokio::test]
+async fn test_override_max_tokens_human_readable() {
+    let mock_server = MockServer::start().await;
+    
+    let mut config = Config::default();
+    config.models.insert("human_readable".to_string(), ModelConfig {
+        api_model_id: Some("test".to_string()),
+        override_max_tokens: Some(json!("64k")),
+        ..Default::default()
+    });
+    config.profiles.insert("test".to_string(), anthropic_bridge::config::Profile {
+        rules: vec![anthropic_bridge::config::Rule {
+            pattern: "test".to_string(),
+            target: "human_readable".to_string(),
+            match_features: vec![],
+            reasoning_target: None,
+        }],
+    });
+    config.current_profile = "test".to_string();
+    config.upstream.base_url = Some(mock_server.uri());
+
+    let state = Arc::new(AppState {
+        config,
+        client: reqwest::Client::new(),
+        base_url: mock_server.uri(),
+        api_key: Some("k".to_string()),
+        verbose: true,
+        tool_verbose: false,
+        tools_reported: AtomicBool::new(false),
+    });
+    let app = create_router(state);
+
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "1", "choices": [{"message": {"role": "assistant", "content": "ok"}, "index": 0}]
+        })))
+        .mount(&mock_server)
+        .await;
+
+    app.oneshot(Request::builder()
+        .uri("/v1/messages")
+        .method("POST")
+        .header("Content-Type", "application/json")
+        .body(Body::from(json!({
+            "model": "test",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 1000
+        }).to_string()))
+        .unwrap())
+        .await
+        .unwrap();
+
+    let reqs = mock_server.received_requests().await.unwrap();
+    let r: OpenAIChatCompletionRequest = serde_json::from_slice(&reqs[0].body).unwrap();
+    
+    assert_eq!(r.max_tokens, Some(64000));
+}
