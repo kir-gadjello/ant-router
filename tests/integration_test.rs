@@ -70,6 +70,7 @@ fn test_config() -> Config {
                     },
                 ],
                 tool_filters: None,
+                system_prompts: None,
             },
         )]),
         models: HashMap::from([
@@ -276,6 +277,7 @@ async fn test_bug_default_catchall() {
                     }
                 ],
                 tool_filters: None,
+                system_prompts: None,
             })
         ]),
         models: HashMap::from([

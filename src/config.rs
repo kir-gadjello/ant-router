@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use regex::Regex;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Deserializer};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::env;
@@ -57,6 +57,8 @@ fn default_true() -> bool {
 pub struct ServerConfig {
     pub host: Option<String>,
     pub port: Option<u16>,
+    pub ant_port: Option<u16>,
+    pub openai_port: Option<u16>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -70,6 +72,8 @@ pub struct Profile {
     pub rules: Vec<Rule>,
     #[serde(default)]
     pub tool_filters: Option<ToolFilterConfig>,
+    #[serde(default)]
+    pub system_prompts: Option<Vec<SystemPromptRule>>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -90,8 +94,26 @@ pub struct ToolFilterConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct SystemPromptRule {
     pub name: String,
+    #[serde(deserialize_with = "deserialize_string_or_vec")]
     pub r#match: Vec<String>,
     pub actions: Vec<SystemPromptOp>,
+}
+
+fn deserialize_string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrVec {
+        String(String),
+        Vec(Vec<String>),
+    }
+
+    match StringOrVec::deserialize(deserializer)? {
+        StringOrVec::String(s) => Ok(vec![s]),
+        StringOrVec::Vec(v) => Ok(v),
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]

@@ -9,7 +9,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use handlers::{handle_messages, health_check, AppState};
+use handlers::{handle_messages, handle_openai_chat, health_check, AppState};
 use std::sync::Arc;
 use tower_http::trace::TraceLayer;
 
@@ -17,6 +17,14 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health_check))
         .route("/v1/messages", post(handle_messages))
+        .layer(TraceLayer::new_for_http())
+        .with_state(state)
+}
+
+pub fn create_openai_router(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route("/health", get(health_check))
+        .route("/v1/chat/completions", post(handle_openai_chat))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
