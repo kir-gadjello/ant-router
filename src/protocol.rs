@@ -104,6 +104,8 @@ pub struct AnthropicTool {
     pub input_schema: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_examples: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strict: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -279,6 +281,8 @@ pub struct OpenAIFunction {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub parameters: Value, // JSON Schema
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strict: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

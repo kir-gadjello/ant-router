@@ -27,9 +27,11 @@ impl ToolEnforcerMiddleware {
                         "description": "The final response to the user."
                     }
                 },
-                "required": ["response"]
+                "required": ["response"],
+                "additionalProperties": false
             }),
             input_examples: None,
+            strict: Some(true),
         }
     }
 }

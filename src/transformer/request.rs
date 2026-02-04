@@ -268,6 +268,7 @@ pub fn convert_request(
                     name: tool.name,
                     description: tool.description,
                     parameters: schema,
+                    strict: tool.strict,
                 },
             });
         }
@@ -367,6 +368,7 @@ fn preprocess_messages(req: &mut AnthropicMessageRequest, config: &PreprocessCon
     // 2. Sanitize Tool History
     if config.sanitize_tool_history == Some(true) {
         let mut removed_tool_ids = HashSet::new();
+        let mut valid_tool_ids = HashSet::new();
 
         // Pass 1: Identify invalid tool uses in Assistant messages
         for msg in &mut req.messages {
@@ -380,6 +382,7 @@ fn preprocess_messages(req: &mut AnthropicMessageRequest, config: &PreprocessCon
                                 return false; // Remove
                             } else {
                                 report.passed_tool_ids.push(id.clone());
+                                valid_tool_ids.insert(id.clone());
                             }
                         }
                         true // Keep
@@ -389,28 +392,31 @@ fn preprocess_messages(req: &mut AnthropicMessageRequest, config: &PreprocessCon
         }
 
         // Pass 2: Remove orphaned Tool Results
-        if !removed_tool_ids.is_empty() {
-            for msg in &mut req.messages {
-                if let AnthropicMessageContent::Blocks(blocks) = &mut msg.content {
-                    blocks.retain(|block| {
-                        if let AnthropicContentBlock::ToolResult { tool_use_id, .. } = block {
-                            if removed_tool_ids.contains(tool_use_id) {
-                                return false;
-                            }
+        // Remove if corresponding tool_use was removed OR if tool_use is missing from history
+        for msg in &mut req.messages {
+            if let AnthropicMessageContent::Blocks(blocks) = &mut msg.content {
+                blocks.retain(|block| {
+                    if let AnthropicContentBlock::ToolResult { tool_use_id, .. } = block {
+                        if removed_tool_ids.contains(tool_use_id) {
+                            return false;
                         }
-                        true
-                    });
-                }
+                        if !valid_tool_ids.contains(tool_use_id) {
+                            // Also remove if tool_use_id is not in valid_tool_ids (orphaned)
+                            return false;
+                        }
+                    }
+                    true
+                });
             }
-            
-            // Remove empty messages resulting from filtering
-            req.messages.retain(|msg| {
-                match &msg.content {
-                    AnthropicMessageContent::Blocks(blocks) => !blocks.is_empty(),
-                    AnthropicMessageContent::String(s) => !s.is_empty(),
-                }
-            });
         }
+
+        // Remove empty messages resulting from filtering
+        req.messages.retain(|msg| {
+            match &msg.content {
+                AnthropicMessageContent::Blocks(blocks) => !blocks.is_empty(),
+                AnthropicMessageContent::String(s) => !s.is_empty(),
+            }
+        });
     }
     
     report
@@ -421,18 +427,28 @@ fn normalize_content_to_string(content: AnthropicMessageContent) -> Option<Strin
     match content {
         AnthropicMessageContent::String(s) => Some(s),
         AnthropicMessageContent::Blocks(blocks) => {
-            let texts: Vec<String> = blocks
-                .iter()
-                .filter_map(|b| match b {
-                    AnthropicContentBlock::Text { text } => Some(text.clone()),
-                    _ => None, // Tool results usually don't have images
-                })
-                .collect();
+            // Check for complex content (like images)
+            let has_complex = blocks.iter().any(|b| !matches!(b, AnthropicContentBlock::Text { .. }));
 
-            if texts.is_empty() {
-                None
+            if has_complex {
+                // If we have complex content (e.g. images), serialize the whole thing to JSON
+                // so the upstream model at least gets the structured data
+                serde_json::to_string(&blocks).ok()
             } else {
-                Some(texts.join(" "))
+                // Text-only content: join with spaces
+                let texts: Vec<String> = blocks
+                    .iter()
+                    .filter_map(|b| match b {
+                        AnthropicContentBlock::Text { text } => Some(text.clone()),
+                        _ => None,
+                    })
+                    .collect();
+
+                if texts.is_empty() {
+                    None
+                } else {
+                    Some(texts.join(" "))
+                }
             }
         }
     }
