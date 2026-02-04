@@ -91,17 +91,31 @@ pub struct ToolFilterConfig {
 pub struct SystemPromptRule {
     pub name: String,
     pub r#match: Vec<String>,
-    pub action: SystemPromptAction,
+    pub actions: Vec<SystemPromptOp>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
-#[serde(tag = "type", content = "value")]
-pub enum SystemPromptAction {
-    Replace(String),
-    Prepend(String),
-    Append(String),
+#[serde(tag = "type")]
+pub enum SystemPromptOp {
+    #[serde(rename = "replace")]
+    Replace {
+        pattern: String,
+        with: String,
+    },
+    #[serde(rename = "prepend")]
+    Prepend {
+        value: String,
+    },
+    #[serde(rename = "append")]
+    Append {
+        value: String,
+    },
     #[serde(rename = "move_to_user")]
-    MoveToUser(Option<String>),
+    MoveToUser {
+        forced_system_prompt: Option<String>,
+        prefix: Option<String>,
+        suffix: Option<String>,
+    },
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
