@@ -1,5 +1,6 @@
 use crate::config::{Config, glob_to_regex};
 use crate::logging::{log_request, record_interaction};
+use crate::middleware::Middleware;
 use crate::protocol::*;
 use crate::transformer::{convert_request, convert_response, convert_stream, record_stream};
 use axum::{
@@ -29,6 +30,7 @@ pub struct AppState {
     pub tool_verbose: bool,
     pub record: bool,
     pub tools_reported: AtomicBool,
+    pub middlewares: Vec<Box<dyn Middleware>>,
 }
 
 pub async fn health_check() -> impl IntoResponse {
@@ -38,9 +40,21 @@ pub async fn health_check() -> impl IntoResponse {
 pub async fn handle_messages(
     State(state): State<Arc<AppState>>,
     _headers: HeaderMap,
-    Json(payload): Json<AnthropicMessageRequest>,
+    Json(mut payload): Json<AnthropicMessageRequest>,
 ) -> impl IntoResponse {
     let _start = std::time::Instant::now();
+
+    // Middleware: on_request
+    for m in &state.middlewares {
+        if let Err(e) = m.on_request(&mut payload) {
+            error!("Middleware request error: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+                .into_response();
+        }
+    }
 
     // 0. Logging
     if state.config.log_enabled {
@@ -238,19 +252,32 @@ pub async fn handle_messages(
         let openai_stream = parse_sse_stream(stream);
         let anthropic_stream = convert_stream(openai_stream);
 
-        let final_stream = if state.record {
+        let mut final_stream: std::pin::Pin<
+            Box<dyn futures::Stream<Item = Result<AnthropicStreamEvent, anyhow::Error>> + Send>,
+        > = Box::pin(anthropic_stream);
+
+        // Middleware: transform_stream
+        for m in &state.middlewares {
+            final_stream = m.transform_stream(final_stream);
+        }
+
+        let recorded_stream = if state.record {
             let req_clone = payload.clone();
-            Box::pin(record_stream(Box::pin(anthropic_stream), move |full_resp| {
-                let resp_value = serde_json::to_value(&full_resp).unwrap_or(json!({"error": "Failed to serialize response"}));
+            Box::pin(record_stream(final_stream, move |full_resp| {
+                let resp_value = serde_json::to_value(&full_resp)
+                    .unwrap_or(json!({"error": "Failed to serialize response"}));
                 if let Err(e) = record_interaction(&req_clone, &resp_value) {
                     warn!("Failed to record streaming interaction: {}", e);
                 }
-            })) as std::pin::Pin<Box<dyn futures::Stream<Item = Result<AnthropicStreamEvent, anyhow::Error>> + Send>>
+            }))
+                as std::pin::Pin<
+                    Box<dyn futures::Stream<Item = Result<AnthropicStreamEvent, anyhow::Error>> + Send>,
+                >
         } else {
-            Box::pin(anthropic_stream) as std::pin::Pin<Box<dyn futures::Stream<Item = Result<AnthropicStreamEvent, anyhow::Error>> + Send>>
+            final_stream
         };
 
-        let sse_stream = Box::pin(final_stream.map(|res: Result<AnthropicStreamEvent, anyhow::Error>| {
+        let sse_stream = Box::pin(recorded_stream.map(|res: Result<AnthropicStreamEvent, anyhow::Error>| {
             match res {
                 Ok(event) => {
                     let event_type = get_event_type(&event);
@@ -279,10 +306,23 @@ pub async fn handle_messages(
         }
 
         match convert_response(openai_resp) {
-            Ok(anthropic_resp) => {
+            Ok(mut anthropic_resp) => {
+                // Middleware: on_response
+                for m in &state.middlewares {
+                    if let Err(e) = m.on_response(&mut anthropic_resp) {
+                        error!("Middleware response error: {}", e);
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(json!({"error": e.to_string()})),
+                        )
+                            .into_response();
+                    }
+                }
+
                 if state.record {
                     let req_clone = payload.clone();
-                    let resp_value = serde_json::to_value(&anthropic_resp).unwrap_or(json!({"error": "Failed to serialize response"}));
+                    let resp_value = serde_json::to_value(&anthropic_resp)
+                        .unwrap_or(json!({"error": "Failed to serialize response"}));
                     tokio::task::spawn_blocking(move || {
                         if let Err(e) = record_interaction(&req_clone, &resp_value) {
                             warn!("Failed to record interaction: {}", e);
@@ -290,7 +330,7 @@ pub async fn handle_messages(
                     });
                 }
                 (StatusCode::OK, Json(anthropic_resp)).into_response()
-            },
+            }
             Err(e) => {
                 error!("Failed to convert response: {}", e);
                 (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response()
