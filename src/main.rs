@@ -1,4 +1,4 @@
-use anthropic_bridge::{config::Config, create_router, handlers::AppState};
+use anthropic_bridge::{config::Config, create_router, create_openai_router, handlers::AppState};
 use anyhow::{Context, Result};
 use std::env;
 use std::fs;
@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{info, warn, Level};
+use tracing::{error, info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 
 // Embed default config
@@ -145,22 +145,19 @@ async fn main() -> Result<()> {
     }
 
     // 3. Resolve Server Settings (Precedence: Env > CLI > Config > Default)
-    let mut port = 3000;
+    // Primary/Fallback Port
+    let mut primary_port = 3000;
     if let Some(p) = config.server.port {
-        port = p;
+        primary_port = p;
     }
     if let Some(p) = cli_port {
-        port = p;
+        primary_port = p;
     }
     if let Ok(p) = env::var("PORT") {
         if let Ok(p_parsed) = p.parse() {
-            port = p_parsed;
+            primary_port = p_parsed;
         }
     }
-
-    info!("Config port: {:?}", config.server.port);
-    info!("CLI port: {:?}", cli_port);
-    info!("Final Resolved port: {}", port);
 
     let mut host = "0.0.0.0".to_string();
     if let Some(h) = &config.server.host {
@@ -171,6 +168,17 @@ async fn main() -> Result<()> {
     }
     if let Ok(h) = env::var("HOST") {
         host = h;
+    }
+
+    // Resolve specific ports
+    let ant_port = config.server.ant_port.unwrap_or(primary_port);
+    let openai_port = config.server.openai_port;
+
+    info!("Resolved Anthropic Port: {}", ant_port);
+    if let Some(op) = openai_port {
+        info!("Resolved OpenAI Port: {}", op);
+    } else {
+        info!("OpenAI Frontend Disabled (not configured)");
     }
 
     // 4. Resolve Upstream Settings
@@ -218,15 +226,46 @@ async fn main() -> Result<()> {
         tools_reported: AtomicBool::new(false),
     });
 
-    // 5. Router
-    let app = create_router(state);
+    // 5. Start Servers
+    let mut handles = vec![];
 
-    // 6. Server
-    let addr: SocketAddr = format!("{}:{}", host, port).parse()?;
-    info!("Listening on {}", addr);
+    // Anthropic Server
+    let ant_app = create_router(state.clone());
+    let ant_addr: SocketAddr = format!("{}:{}", host, ant_port).parse()?;
+    info!("Starting Anthropic Proxy on {}", ant_addr);
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    // We bind listeners before spawning to fail early if port in use
+    let ant_listener = tokio::net::TcpListener::bind(ant_addr).await?;
+    handles.push(tokio::spawn(async move {
+        if let Err(e) = axum::serve(ant_listener, ant_app).await {
+            error!("Anthropic Server Error: {}", e);
+        }
+    }));
+
+    // OpenAI Server
+    if let Some(op) = openai_port {
+        let openai_app = create_openai_router(state.clone());
+        let openai_addr: SocketAddr = format!("{}:{}", host, op).parse()?;
+        info!("Starting OpenAI Proxy on {}", openai_addr);
+
+        let openai_listener = tokio::net::TcpListener::bind(openai_addr).await?;
+        handles.push(tokio::spawn(async move {
+            if let Err(e) = axum::serve(openai_listener, openai_app).await {
+                error!("OpenAI Server Error: {}", e);
+            }
+        }));
+    }
+
+    // Wait for all servers
+    if handles.is_empty() {
+        warn!("No servers started!");
+    } else {
+        // We wait for any of them to finish (likely with error) or run forever
+        // futures::future::select_all might be better, or just await them all
+        for h in handles {
+            let _ = h.await;
+        }
+    }
 
     Ok(())
 }

@@ -1,4 +1,4 @@
-use crate::config::{Config, glob_to_regex};
+use crate::config::{Config, glob_to_regex, ApiParams, SystemPromptAction, SystemPromptRule, ToolFilterConfig};
 use crate::logging::{log_request, record_interaction};
 use crate::middleware::system_prompt::SystemPromptPatcherMiddleware;
 use crate::middleware::tool_enforcer::ToolEnforcerMiddleware;
@@ -44,10 +44,20 @@ pub async fn handle_messages(
     _headers: HeaderMap,
     Json(mut payload): Json<AnthropicMessageRequest>,
 ) -> impl IntoResponse {
-    let _start = std::time::Instant::now();
+    // 1. Resolve Profile (Original Logic, overrides not supported on this endpoint per spec, or implicit?)
+    // Task T4 says "if incoming request model starts with OVERRIDE-...".
+    // Usually applies to any request, but let's support it here too if needed.
+    // But existing logic relies on `state.config.current_profile`.
+    // Let's integrate `resolve_model_with_overrides` logic here too if possible,
+    // but `resolve_model_with_overrides` expects OpenAI request logic?
+    // No, T4 says "incoming request model". Could be Anthropic too.
+    // I'll implement override logic here too.
 
-    // 2. Resolve Model Configuration
-    let profile_name = &state.config.current_profile;
+    // Check for override
+    let (target_profile_name, target_logical_id_override) = check_overrides(&payload.model);
+
+    let profile_name = target_profile_name.as_deref().unwrap_or(&state.config.current_profile);
+
     let profile = match state.config.profiles.get(profile_name) {
         Some(p) => p,
         None => {
@@ -60,22 +70,19 @@ pub async fn handle_messages(
         }
     };
 
-    // Construct Middlewares Per Request (to support profile-specific configs)
+    // Construct Middlewares
     let mut middlewares: Vec<Box<dyn Middleware>> = Vec::new();
 
-    // 1. Tool Filtering (Profile specific > Global fallback)
     let tool_filter_config = profile
         .tool_filters
         .clone()
         .or_else(|| state.config.tool_filters.clone());
     middlewares.push(Box::new(ToolFilterMiddleware::new(tool_filter_config)));
 
-    // 2. System Prompt Patcher (Global for now, but could be profile specific)
-    middlewares.push(Box::new(SystemPromptPatcherMiddleware::new(
-        state.config.system_prompts.clone(),
-    )));
+    // Task T3: Profile specific system prompts
+    let system_prompts = profile.system_prompts.clone().unwrap_or_else(|| state.config.system_prompts.clone());
+    middlewares.push(Box::new(SystemPromptPatcherMiddleware::new(system_prompts)));
 
-    // 3. Tool Enforcer (ExitTool) - Toggled by config
     if state.config.enable_exit_tool {
         middlewares.push(Box::new(ToolEnforcerMiddleware::new()));
     }
@@ -92,7 +99,7 @@ pub async fn handle_messages(
         }
     }
 
-    // 0. Logging
+    // Logging
     if state.config.log_enabled {
         let log_path = state.config.get_log_path();
         let payload_clone = payload.clone();
@@ -103,25 +110,24 @@ pub async fn handle_messages(
         });
     }
 
-    // 1. Detect Features
+    // Feature Detection
     let has_images = payload.messages.iter().any(|m| match &m.content {
         AnthropicMessageContent::Blocks(blocks) => blocks
             .iter()
             .any(|b| matches!(b, AnthropicContentBlock::Image { .. })),
         _ => false,
     });
-
     let thinking_enabled = payload.thinking.is_some();
-
     let mut request_features = Vec::new();
-    if has_images {
-        request_features.push("vision");
-    }
-    if thinking_enabled {
-        request_features.push("reasoning");
-    }
+    if has_images { request_features.push("vision"); }
+    if thinking_enabled { request_features.push("reasoning"); }
 
-    let target_logical_id = resolve_via_rules(profile, &payload.model, &request_features);
+    // Model Resolution
+    let target_logical_id = if let Some(id) = target_logical_id_override {
+        id
+    } else {
+        resolve_via_rules(profile, &payload.model, &request_features)
+    };
 
     // Lookup ModelConfig
     let model_conf = state.config.models.get(&target_logical_id);
@@ -132,7 +138,6 @@ pub async fn handle_messages(
         (target_logical_id.clone(), None)
     };
 
-    // 3. Check `no_ant` flag
     if state.config.no_ant && wire_model.to_lowercase().contains("anthropic") {
         return (
             StatusCode::FORBIDDEN,
@@ -145,7 +150,7 @@ pub async fn handle_messages(
         payload.model, request_features, target_logical_id, wire_model
     );
 
-    // 4. Transform Request
+    // Convert Request
     let (openai_req, report) = match convert_request(payload.clone(), wire_model.clone(), model_conf) {
         Ok(res) => res,
         Err(e) => {
@@ -157,13 +162,11 @@ pub async fn handle_messages(
         }
     };
 
-    // Tool Verbose Reporting (Once per session)
     if state.tool_verbose {
         report_tools_once(&state, &report);
     }
 
-    // 5. Prepare Upstream Request
-    let url = format!("{}/v1/chat/completions", state.base_url);
+    // Prepare Body
     let mut final_body = serde_json::to_value(&openai_req).unwrap();
     if let Some(params) = &api_params {
         if !params.extra_body.is_empty() {
@@ -175,101 +178,14 @@ pub async fn handle_messages(
         }
     }
 
-    // --- VERBOSE LOGGING START ---
-    if state.verbose {
-        let mut log_body = final_body.clone();
-        truncate_long_strings(&mut log_body);
-        info!("Upstream Request Body: {}", serde_json::to_string_pretty(&log_body).unwrap_or_default());
-    }
-    // --- VERBOSE LOGGING END ---
-
-    // 6. Send Request (with Retry)
-    let max_retries = api_params.as_ref().and_then(|p| p.retry.as_ref()).map(|r| r.max_retries).unwrap_or(0);
-    let backoff = api_params.as_ref().and_then(|p| p.retry.as_ref()).map(|r| r.backoff_ms).unwrap_or(500);
-
-    let mut attempts = 0;
-    let mut context_length_retries = 0;
-    let max_context_retries = 1;
-
-    let response = loop {
-        attempts += 1;
-        
-        let mut attempt_builder = state.client.post(&url);
-        if let Some(key) = &state.api_key {
-            attempt_builder = attempt_builder.header("Authorization", format!("Bearer {}", key));
-        }
-        if let Some(params) = &api_params {
-            for (k, v) in &params.headers {
-                attempt_builder = attempt_builder.header(k, v);
-            }
-        }
-        attempt_builder = attempt_builder.json(&final_body);
-
-        match attempt_builder.send().await {
-            Ok(res) => {
-                let status = res.status();
-                if status.is_server_error() && attempts <= max_retries {
-                    warn!("Upstream server error {}, retrying ({}/{})", status, attempts, max_retries);
-                    tokio::time::sleep(Duration::from_millis(backoff * (2_u64.pow(attempts - 1)))).await;
-                    continue;
-                }
-                
-                if status == StatusCode::BAD_REQUEST && context_length_retries < max_context_retries {
-                    let error_bytes = res.bytes().await.unwrap_or_default();
-                    let error_text = String::from_utf8_lossy(&error_bytes);
-                    
-                    // Robust regex to parse OpenRouter context length error across newlines and multiple input types
-                    let re = Regex::new(r"(?s)maximum context length is (\d+).*?requested about (\d+).*?(\d+) in the output").unwrap();
-                    if let Some(caps) = re.captures(&error_text) {
-                        if let (Some(max_ctx), Some(total_req), Some(output_req)) = (caps.get(1), caps.get(2), caps.get(3)) {
-                            if let (Ok(max_ctx_val), Ok(total_val), Ok(output_val)) = (
-                                max_ctx.as_str().parse::<u32>(), 
-                                total_req.as_str().parse::<u32>(),
-                                output_req.as_str().parse::<u32>()
-                            ) {
-                                let input_val = total_val.saturating_sub(output_val);
-                                info!("Caught context length error. Max: {}, Total Requested: {}, Output Requested: {} (Input: {}). Adjusting max_tokens and retrying.", 
-                                    max_ctx_val, total_val, output_val, input_val);
-                                
-                                let safety_margin = 100;
-                                let available = max_ctx_val.saturating_sub(input_val).saturating_sub(safety_margin);
-                                if available > 0 {
-                                    if let Value::Object(ref mut map) = final_body {
-                                        map.insert("max_tokens".to_string(), json!(available));
-                                    }
-                                    context_length_retries += 1;
-                                    continue;
-                                }
-                            }
-                        }
-                    }
-                    error!("Upstream 400 Bad Request: {}", error_text);
-                    let error_body: Value = serde_json::from_slice(&error_bytes).unwrap_or(json!({"error": error_text}));
-                    return (StatusCode::BAD_REQUEST, Json(error_body)).into_response();
-                }
-                
-                break res;
-            }
-            Err(e) => {
-                if attempts <= max_retries {
-                    warn!("Upstream connection failed: {}, retrying ({}/{})", e, attempts, max_retries);
-                    tokio::time::sleep(Duration::from_millis(backoff * (2_u64.pow(attempts - 1)))).await;
-                    continue;
-                }
-                return (StatusCode::BAD_GATEWAY, Json(json!({"error": e.to_string()}))).into_response();
-            }
-        }
+    // Execute
+    let url = format!("{}/v1/chat/completions", state.base_url);
+    let response = match execute_upstream_request(&state, &url, final_body, &api_params).await {
+        Ok(res) => res,
+        Err(e) => return e.into_response(),
     };
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let error_text = response.text().await.unwrap_or_default();
-        error!("Upstream error {}: {}", status, error_text);
-        let error_body = serde_json::from_str::<Value>(&error_text).unwrap_or(json!({"error": error_text}));
-        return (status, Json(error_body)).into_response();
-    }
-
-    // 7. Handle Response
+    // Handle Response
     if payload.stream == Some(true) {
         let stream = response.bytes_stream();
         let openai_stream = parse_sse_stream(stream);
@@ -279,7 +195,6 @@ pub async fn handle_messages(
             Box<dyn futures::Stream<Item = Result<AnthropicStreamEvent, anyhow::Error>> + Send>,
         > = Box::pin(anthropic_stream);
 
-        // Middleware: transform_stream
         for m in &middlewares {
             final_stream = m.transform_stream(final_stream);
         }
@@ -330,15 +245,13 @@ pub async fn handle_messages(
 
         match convert_response(openai_resp) {
             Ok(mut anthropic_resp) => {
-                // Middleware: on_response
                 for m in &middlewares {
                     if let Err(e) = m.on_response(&mut anthropic_resp) {
                         error!("Middleware response error: {}", e);
                         return (
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(json!({"error": e.to_string()})),
-                        )
-                            .into_response();
+                        ).into_response();
                     }
                 }
 
@@ -361,6 +274,460 @@ pub async fn handle_messages(
         }
     }
 }
+
+pub async fn handle_openai_chat(
+    State(state): State<Arc<AppState>>,
+    _headers: HeaderMap,
+    Json(mut payload): Json<OpenAIChatCompletionRequest>,
+) -> impl IntoResponse {
+    // 1. Resolve Profile & Model (with Overrides)
+    let (target_profile_name, target_logical_id_override) = check_overrides(&payload.model);
+
+    let profile_name = target_profile_name.as_deref().unwrap_or(&state.config.current_profile);
+
+    let profile = match state.config.profiles.get(profile_name) {
+        Some(p) => p,
+        None => {
+            error!("Current profile '{}' not found in config", profile_name);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("Profile '{}' not found", profile_name)})),
+            )
+                .into_response();
+        }
+    };
+
+    // 2. Middleware Helpers
+    // System Prompts
+    let system_prompts = profile.system_prompts.clone().unwrap_or_else(|| state.config.system_prompts.clone());
+    apply_openai_system_prompt_patch(&mut payload, &system_prompts);
+
+    // Tool Filtering
+    let tool_filter_config = profile
+        .tool_filters
+        .clone()
+        .or_else(|| state.config.tool_filters.clone());
+    apply_openai_tool_filter(&mut payload, &tool_filter_config);
+
+    // Feature Detection (OpenAI specific)
+    let mut request_features = Vec::new();
+    // Check for images
+    for msg in &payload.messages {
+        if let Some(OpenAIContent::Array(parts)) = &msg.content {
+            if parts.iter().any(|p| matches!(p, OpenAIContentPart::ImageUrl { .. })) {
+                request_features.push("vision");
+                break;
+            }
+        }
+    }
+    // Reasoning? OpenAI reasoning not standardized, maybe checks `reasoning` field
+    // or specific model params. Assuming no explicit feature check for now unless standard emerges.
+
+    // Model Resolution
+    let target_logical_id = if let Some(id) = target_logical_id_override {
+        id
+    } else {
+        resolve_via_rules(profile, &payload.model, &request_features)
+    };
+
+    // Lookup ModelConfig
+    let model_conf = state.config.models.get(&target_logical_id);
+    let (wire_model, api_params) = if let Some(conf) = model_conf {
+        (state.config.get_wire_model_id(conf), conf.api_params.clone())
+    } else {
+        warn!("Logical model ID '{}' resolved but not found in models definition", target_logical_id);
+        (target_logical_id.clone(), None)
+    };
+
+    // Check `no_ant` (if applicable? Spec didn't say only for Ant endpoint)
+    if state.config.no_ant && wire_model.to_lowercase().contains("anthropic") {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "Requests to Anthropic models are forbidden by configuration"})),
+        ).into_response();
+    }
+
+    info!(
+        "OpenAI Request for '{}' (features={:?}) -> Logical '{}' -> Wire '{}'",
+        payload.model, request_features, target_logical_id, wire_model
+    );
+
+    // Update Model in Payload
+    payload.model = wire_model;
+
+    // Prepare Upstream
+    let mut final_body = serde_json::to_value(&payload).unwrap();
+    if let Some(params) = &api_params {
+        if !params.extra_body.is_empty() {
+            if let Value::Object(ref mut map) = final_body {
+                for (k, v) in &params.extra_body {
+                    map.insert(k.clone(), v.clone());
+                }
+            }
+        }
+    }
+
+    let url = format!("{}/v1/chat/completions", state.base_url);
+    let response = match execute_upstream_request(&state, &url, final_body, &api_params).await {
+        Ok(res) => res,
+        Err(e) => return e.into_response(),
+    };
+
+    if payload.stream == Some(true) {
+        let stream = response.bytes_stream();
+        let openai_stream = parse_sse_stream(stream);
+
+        // Pass-through stream
+        let sse_stream = Box::pin(openai_stream.map(|res| {
+            match res {
+                Ok(chunk) => Event::default().json_data(chunk),
+                Err(e) => Event::default()
+                    .event("error")
+                    .json_data(json!({"error": e.to_string()})),
+            }
+        }));
+
+        Sse::new(sse_stream).keep_alive(KeepAlive::default()).into_response()
+    } else {
+        let resp_body_bytes = match response.bytes().await {
+            Ok(b) => b,
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
+        };
+
+        // We can parse it to verify or log
+        let resp_json: Value = match serde_json::from_slice(&resp_body_bytes) {
+            Ok(v) => v,
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
+        };
+
+        if state.verbose {
+             let mut log_resp = resp_json.clone();
+            truncate_long_strings(&mut log_resp);
+            info!("Upstream Response Body: {}", serde_json::to_string_pretty(&log_resp).unwrap_or_default());
+        }
+
+        (StatusCode::OK, Json(resp_json)).into_response()
+    }
+}
+
+async fn execute_upstream_request(
+    state: &Arc<AppState>,
+    url: &str,
+    mut final_body: Value,
+    api_params: &Option<ApiParams>,
+) -> Result<reqwest::Response, (StatusCode, Json<Value>)> {
+    if state.verbose {
+        let mut log_body = final_body.clone();
+        truncate_long_strings(&mut log_body);
+        info!("Upstream Request Body: {}", serde_json::to_string_pretty(&log_body).unwrap_or_default());
+    }
+
+    let max_retries = api_params.as_ref().and_then(|p| p.retry.as_ref()).map(|r| r.max_retries).unwrap_or(0);
+    let backoff = api_params.as_ref().and_then(|p| p.retry.as_ref()).map(|r| r.backoff_ms).unwrap_or(500);
+
+    let mut attempts = 0;
+    let mut context_length_retries = 0;
+    let max_context_retries = 1;
+
+    loop {
+        attempts += 1;
+        
+        let mut attempt_builder = state.client.post(url);
+        if let Some(key) = &state.api_key {
+            attempt_builder = attempt_builder.header("Authorization", format!("Bearer {}", key));
+        }
+        if let Some(params) = &api_params {
+            for (k, v) in &params.headers {
+                attempt_builder = attempt_builder.header(k, v);
+            }
+        }
+        attempt_builder = attempt_builder.json(&final_body);
+
+        match attempt_builder.send().await {
+            Ok(res) => {
+                let status = res.status();
+                if status.is_server_error() && attempts <= max_retries {
+                    warn!("Upstream server error {}, retrying ({}/{})", status, attempts, max_retries);
+                    tokio::time::sleep(Duration::from_millis(backoff * (2_u64.pow(attempts - 1)))).await;
+                    continue;
+                }
+                
+                if status == StatusCode::BAD_REQUEST && context_length_retries < max_context_retries {
+                    let error_bytes = res.bytes().await.unwrap_or_default();
+                    let error_text = String::from_utf8_lossy(&error_bytes);
+                    
+                    let re = Regex::new(r"(?s)maximum context length is (\d+).*?requested about (\d+).*?(\d+) in the output").unwrap();
+                    if let Some(caps) = re.captures(&error_text) {
+                        if let (Some(max_ctx), Some(total_req), Some(output_req)) = (caps.get(1), caps.get(2), caps.get(3)) {
+                            if let (Ok(max_ctx_val), Ok(total_val), Ok(output_val)) = (
+                                max_ctx.as_str().parse::<u32>(), 
+                                total_req.as_str().parse::<u32>(),
+                                output_req.as_str().parse::<u32>()
+                            ) {
+                                let input_val = total_val.saturating_sub(output_val);
+                                info!("Caught context length error. Max: {}, Total Requested: {}, Output Requested: {} (Input: {}). Adjusting max_tokens and retrying.", 
+                                    max_ctx_val, total_val, output_val, input_val);
+                                
+                                let safety_margin = 100;
+                                let available = max_ctx_val.saturating_sub(input_val).saturating_sub(safety_margin);
+                                if available > 0 {
+                                    if let Value::Object(ref mut map) = final_body {
+                                        map.insert("max_tokens".to_string(), json!(available));
+                                    }
+                                    context_length_retries += 1;
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                    error!("Upstream 400 Bad Request: {}", error_text);
+                    let error_body: Value = serde_json::from_slice(&error_bytes).unwrap_or(json!({"error": error_text}));
+                    return Err((StatusCode::BAD_REQUEST, Json(error_body)));
+                }
+                
+                if !status.is_success() {
+                    let error_text = res.text().await.unwrap_or_default();
+                    error!("Upstream error {}: {}", status, error_text);
+                    let error_body = serde_json::from_str::<Value>(&error_text).unwrap_or(json!({"error": error_text}));
+                    return Err((status, Json(error_body)));
+                }
+
+                return Ok(res);
+            }
+            Err(e) => {
+                if attempts <= max_retries {
+                    warn!("Upstream connection failed: {}, retrying ({}/{})", e, attempts, max_retries);
+                    tokio::time::sleep(Duration::from_millis(backoff * (2_u64.pow(attempts - 1)))).await;
+                    continue;
+                }
+                return Err((StatusCode::BAD_GATEWAY, Json(json!({"error": e.to_string()}))));
+            }
+        }
+    }
+}
+
+// Override Logic
+fn check_overrides(model: &str) -> (Option<String>, Option<String>) {
+    if let Some(rest) = model.strip_prefix("OVERRIDE-MODEL-") {
+        return (None, Some(rest.to_string()));
+    }
+    if let Some(rest) = model.strip_prefix("OVERRIDE-") {
+        return (Some(rest.to_string()), None);
+    }
+    (None, None)
+}
+
+// OpenAI Middleware Logic
+fn apply_openai_system_prompt_patch(req: &mut OpenAIChatCompletionRequest, rules: &[SystemPromptRule]) {
+    if rules.is_empty() { return; }
+
+    // 1. Consolidate current system prompt
+    let mut current_system = String::new();
+    let mut system_indices = Vec::new();
+
+    for (i, msg) in req.messages.iter().enumerate() {
+        if msg.role == "system" {
+            if let Some(content) = &msg.content {
+                match content {
+                    OpenAIContent::String(s) => {
+                        if !current_system.is_empty() { current_system.push_str("\n\n"); }
+                        current_system.push_str(s);
+                        system_indices.push(i);
+                    }
+                    OpenAIContent::Array(parts) => {
+                         for part in parts {
+                             if let OpenAIContentPart::Text { text } = part {
+                                if !current_system.is_empty() { current_system.push_str("\n\n"); }
+                                current_system.push_str(text);
+                                system_indices.push(i);
+                             }
+                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Find matching rule
+    for rule in rules {
+        let mut all_matched = true;
+        for pattern in &rule.r#match {
+            if pattern == "ALL" {
+                continue; // Matches everything
+            }
+            if let Ok(re) = Regex::new(pattern) {
+                if !re.is_match(&current_system) {
+                    all_matched = false;
+                    break;
+                }
+            } else if let Ok(re) = glob_to_regex(pattern) {
+                if !re.is_match(&current_system) {
+                    all_matched = false;
+                    break;
+                }
+            } else {
+                 all_matched = false;
+            }
+        }
+
+        if all_matched {
+            // Apply Action
+            apply_openai_action(req, &rule.action, &current_system, &system_indices);
+            break;
+        }
+    }
+}
+
+fn apply_openai_action(req: &mut OpenAIChatCompletionRequest, action: &SystemPromptAction, current_content: &str, system_indices: &[usize]) {
+    match action {
+        SystemPromptAction::Replace(new_content) => {
+            // Remove old system messages
+            // We iterate in reverse to avoid index shifting issues if we remove
+            // Actually simpler: retain non-system, then add new one?
+            // Or replace first system message and remove others?
+            if system_indices.is_empty() {
+                // Insert at top
+                req.messages.insert(0, OpenAIMessage {
+                    role: "system".to_string(),
+                    content: Some(OpenAIContent::String(new_content.clone())),
+                    name: None, tool_calls: None, tool_call_id: None, reasoning: None,
+                });
+            } else {
+                // Replace first, remove others
+                let first_idx = system_indices[0];
+                req.messages[first_idx].content = Some(OpenAIContent::String(new_content.clone()));
+
+                // Remove others
+                let mut offset = 0;
+                for &idx in system_indices.iter().skip(1) {
+                    let effective_idx = idx - offset;
+                    if effective_idx < req.messages.len() {
+                        req.messages.remove(effective_idx);
+                        offset += 1;
+                    }
+                }
+            }
+        },
+        SystemPromptAction::Prepend(prefix) => {
+            let new_content = if current_content.is_empty() {
+                prefix.clone()
+            } else {
+                format!("{}\n\n{}", prefix, current_content)
+            };
+            update_openai_system_content(req, system_indices, new_content);
+        },
+        SystemPromptAction::Append(suffix) => {
+            let new_content = if current_content.is_empty() {
+                suffix.clone()
+            } else {
+                format!("{}\n\n{}", current_content, suffix)
+            };
+            update_openai_system_content(req, system_indices, new_content);
+        },
+        SystemPromptAction::MoveToUser(replacement) => {
+            // 1. Remove/Replace system prompt
+            if let Some(r) = replacement {
+                 update_openai_system_content(req, system_indices, r.clone());
+            } else {
+                 // Remove all system messages
+                 // Iterate reverse to remove safely
+                 for i in (0..req.messages.len()).rev() {
+                     if req.messages[i].role == "system" {
+                         req.messages.remove(i);
+                     }
+                 }
+            }
+
+            if current_content.is_empty() {
+                return;
+            }
+
+            // 2. Prepend old content to first user message
+            if let Some(first_user) = req.messages.iter_mut().find(|m| m.role == "user") {
+                 match &mut first_user.content {
+                     Some(OpenAIContent::String(s)) => {
+                         *s = format!("{}\n\n{}", current_content, s);
+                     },
+                     Some(OpenAIContent::Array(parts)) => {
+                         parts.insert(0, OpenAIContentPart::Text { text: current_content.to_string() });
+                     },
+                     None => {
+                         first_user.content = Some(OpenAIContent::String(current_content.to_string()));
+                     }
+                 }
+            } else {
+                 // Insert new user message
+                 req.messages.insert(0, OpenAIMessage {
+                     role: "user".to_string(),
+                     content: Some(OpenAIContent::String(current_content.to_string())),
+                     name: None, tool_calls: None, tool_call_id: None, reasoning: None,
+                 });
+            }
+        }
+    }
+}
+
+fn update_openai_system_content(req: &mut OpenAIChatCompletionRequest, indices: &[usize], new_content: String) {
+    if indices.is_empty() {
+         req.messages.insert(0, OpenAIMessage {
+             role: "system".to_string(),
+             content: Some(OpenAIContent::String(new_content)),
+             name: None, tool_calls: None, tool_call_id: None, reasoning: None,
+         });
+    } else {
+        let first_idx = indices[0];
+        req.messages[first_idx].content = Some(OpenAIContent::String(new_content));
+        // Remove others if split? "Allow general per-systemprompt...".
+        // Consolidating is safer for prepend/append.
+        let mut offset = 0;
+        for &idx in indices.iter().skip(1) {
+             let effective_idx = idx - offset;
+             if effective_idx < req.messages.len() {
+                 req.messages.remove(effective_idx);
+                 offset += 1;
+             }
+        }
+    }
+}
+
+fn apply_openai_tool_filter(req: &mut OpenAIChatCompletionRequest, config: &Option<ToolFilterConfig>) {
+    let config = match config {
+        Some(c) => c,
+        None => return,
+    };
+
+    if let Some(tools) = &mut req.tools {
+        tools.retain(|tool| {
+            let name = &tool.function.name;
+
+             // Deny logic
+             if let Some(deny_list) = &config.deny {
+                for pattern in deny_list {
+                    if let Ok(re) = Regex::new(pattern) {
+                        if re.is_match(name) { return false; }
+                    } else if let Ok(re) = glob_to_regex(pattern) {
+                        if re.is_match(name) { return false; }
+                    }
+                }
+            }
+
+            // Allow logic
+            if let Some(allow_list) = &config.allow {
+                let mut matched = false;
+                for pattern in allow_list {
+                    if let Ok(re) = Regex::new(pattern) {
+                        if re.is_match(name) { matched = true; break; }
+                    } else if let Ok(re) = glob_to_regex(pattern) {
+                        if re.is_match(name) { matched = true; break; }
+                    }
+                }
+                if !matched { return false; }
+            }
+            true
+        });
+    }
+}
+
 
 fn report_tools_once(state: &AppState, report: &crate::transformer::request::PreprocessReport) {
     if !state.tools_reported.swap(true, Ordering::Relaxed) {
@@ -567,5 +934,13 @@ mod tests {
         assert_eq!(c2.choices[0].delta.content.as_deref(), Some("🌍"));
 
         assert!(parsed_stream.next().await.is_none());
+    }
+
+    #[test]
+    fn test_check_overrides() {
+        assert_eq!(check_overrides("gpt-4"), (None, None));
+        assert_eq!(check_overrides("OVERRIDE-myprofile"), (Some("myprofile".to_string()), None));
+        assert_eq!(check_overrides("OVERRIDE-MODEL-claude-3"), (None, Some("claude-3".to_string())));
+        assert_eq!(check_overrides("OVERRIDE-MODEL-something"), (None, Some("something".to_string())));
     }
 }

@@ -34,6 +34,7 @@ async fn test_preprocess_merge_sysmsgs() {
             reasoning_target: None,
         }],
         tool_filters: None,
+        system_prompts: None,
     });
     config.current_profile = "test".to_string();
     config.upstream.base_url = Some(mock_server.uri());
@@ -107,6 +108,7 @@ async fn test_preprocess_sanitize_tool_history() {
             reasoning_target: None,
         }],
         tool_filters: None,
+        system_prompts: None,
     });
     config.current_profile = "test".to_string();
     config.upstream.base_url = Some(mock_server.uri());
@@ -223,6 +225,7 @@ async fn test_max_output_cap() {
             reasoning_target: None,
         }],
         tool_filters: None,
+        system_prompts: None,
     });
     config.current_profile = "test".to_string();
     config.upstream.base_url = Some(mock_server.uri());
@@ -283,6 +286,7 @@ async fn test_max_tokens_override() {
             reasoning_target: None,
         }],
         tool_filters: None,
+        system_prompts: None,
     });
     config.current_profile = "test".to_string();
     config.upstream.base_url = Some(mock_server.uri());
@@ -346,6 +350,7 @@ async fn test_max_output_tokens_auto() {
             reasoning_target: None,
         }],
         tool_filters: None,
+        system_prompts: None,
     });
     config.current_profile = "test".to_string();
     config.upstream.base_url = Some(mock_server.uri());
@@ -410,6 +415,7 @@ async fn test_override_max_tokens_auto() {
             reasoning_target: None,
         }],
         tool_filters: None,
+        system_prompts: None,
     });
     config.current_profile = "test".to_string();
     config.upstream.base_url = Some(mock_server.uri());
@@ -470,6 +476,7 @@ async fn test_override_max_tokens_human_readable() {
             reasoning_target: None,
         }],
         tool_filters: None,
+        system_prompts: None,
     });
     config.current_profile = "test".to_string();
     config.upstream.base_url = Some(mock_server.uri());
