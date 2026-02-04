@@ -262,7 +262,36 @@ pub fn convert_request(
                     }
 
                     let mut schema = tool.input_schema;
+                    let mut strict = tool.strict;
                     remove_uri_format(&mut schema);
+
+                    // --- Preprocess: Strict Tools (Edit) ---
+                    if let Some(pp) = model_config.and_then(|c| c.preprocess.as_ref()) {
+                        if pp.strict_tools == Some(true) && tool.name == "Edit" {
+                            strict = Some(true);
+                            // Enforce required fields for Edit tool
+                            if let Some(props) = schema.as_object_mut() {
+                                // Ensure additionalProperties: false
+                                props.insert("additionalProperties".to_string(), json!(false));
+
+                                // Ensure required fields
+                                let required_fields = vec![
+                                    "file_path", "old_string", "new_string", "replace_all"
+                                ];
+                                props.insert("required".to_string(), json!(required_fields));
+                            }
+                        }
+                    }
+
+                    // --- Preprocess: WebSearch Cleanup ---
+                    if let Some(pp) = model_config.and_then(|c| c.preprocess.as_ref()) {
+                        if pp.clean_web_search == Some(true) && tool.name == "WebSearch" {
+                            if let Some(props) = schema.get_mut("properties").and_then(|p| p.as_object_mut()) {
+                                props.remove("allowed_domains");
+                                props.remove("blocked_domains");
+                            }
+                        }
+                    }
 
                     converted_tools.push(OpenAITool {
                         r#type: "function".to_string(),
@@ -270,7 +299,7 @@ pub fn convert_request(
                             name: tool.name,
                             description: tool.description,
                             parameters: schema,
-                            strict: tool.strict,
+                            strict,
                         },
                     });
                 }
@@ -340,6 +369,16 @@ pub fn convert_request(
         }
     }
 
+    let parallel_tool_calls = if let Some(pp) = model_config.and_then(|c| c.preprocess.as_ref()) {
+        if pp.disable_parallel_tool_calls == Some(true) {
+            Some(false)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let mut initial_req = OpenAIChatCompletionRequest {
         model: resolved_model,
         messages: openai_messages,
@@ -354,6 +393,7 @@ pub fn convert_request(
         frequency_penalty: None,
         user: None,
         reasoning,
+        parallel_tool_calls,
     };
 
     // Apply Overrides

@@ -66,8 +66,7 @@ pub fn convert_response(resp: OpenAIChatCompletionResponse) -> Result<AnthropicM
     // Tool calls
     if let Some(tool_calls) = &msg.tool_calls {
         for tc in tool_calls {
-            let input_val: Value =
-                serde_json::from_str(&tc.function.arguments).unwrap_or(json!({}));
+            let input_val: Value = parse_tool_arguments(&tc.function.arguments);
 
             content_blocks.push(AnthropicContentBlock::ToolUse {
                 id: tc.id.clone(),
@@ -129,6 +128,23 @@ fn estimate_tokens_content(content: &Option<OpenAIContent>) -> u32 {
 
 fn estimate_tokens(text: &str) -> u32 {
     text.split_whitespace().count() as u32
+}
+
+fn parse_tool_arguments(args: &str) -> Value {
+    // 1. Try standard JSON parsing first (fast path)
+    if let Ok(v) = serde_json::from_str(args) {
+        return v;
+    }
+
+    // 2. Try json5 parsing (handles trailing commas, unquoted keys, single quotes)
+    if let Ok(v) = json5::from_str(args) {
+        return v;
+    }
+
+    // 3. Fallback: Return empty object if parsing fails completely, to avoid panic
+    // Ideally we might want to return the raw string in some way, but Anthropic expects structured input.
+    // Logging the error is handled by the caller or implicitly by the empty input.
+    json!({})
 }
 
 pub fn record_stream<S, F>(

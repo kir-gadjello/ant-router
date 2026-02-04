@@ -209,6 +209,12 @@ pub struct PreprocessConfig {
     pub max_output_tokens: Option<Value>,
     #[serde(default)]
     pub max_output_cap: Option<u32>,
+    #[serde(default)]
+    pub disable_parallel_tool_calls: Option<bool>,
+    #[serde(default)]
+    pub strict_tools: Option<bool>,
+    #[serde(default)]
+    pub clean_web_search: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
@@ -419,6 +425,9 @@ fn merge_preprocess(
             sanitize_tool_history: c.sanitize_tool_history.or(p.sanitize_tool_history),
             max_output_tokens: c.max_output_tokens.or(p.max_output_tokens),
             max_output_cap: c.max_output_cap.or(p.max_output_cap),
+            disable_parallel_tool_calls: c.disable_parallel_tool_calls.or(p.disable_parallel_tool_calls),
+            strict_tools: c.strict_tools.or(p.strict_tools),
+            clean_web_search: c.clean_web_search.or(p.clean_web_search),
         }),
     }
 }
