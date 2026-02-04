@@ -32,6 +32,7 @@ dependencies = [
  "chrono",
  "futures",
  "json5",
+ "lazy_static",
  "pin-project",
  "regex",
  "reqwest",

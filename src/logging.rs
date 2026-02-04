@@ -1,11 +1,13 @@
-use crate::protocol::AnthropicMessageRequest;
+use crate::protocol::{AnthropicMessageRequest, OpenAIChatCompletionRequest};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::Value;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use lazy_static::lazy_static;
 
 #[derive(Serialize)]
 struct LogEntry {
@@ -25,6 +27,57 @@ struct InteractionEntry {
     timestamp: DateTime<Utc>,
     request: AnthropicMessageRequest,
     response: Value,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "event", content = "data")]
+pub enum TraceEvent {
+    FrontendRequest {
+        id: String,
+        timestamp: DateTime<Utc>,
+        payload: AnthropicMessageRequest,
+    },
+    UpstreamRequest {
+        id: String,
+        timestamp: DateTime<Utc>,
+        payload: OpenAIChatCompletionRequest,
+    },
+    UpstreamResponse {
+        id: String,
+        timestamp: DateTime<Utc>,
+        payload: Value, // OpenAIChatCompletionResponse or Chunk
+    },
+    FrontendResponse {
+        id: String,
+        timestamp: DateTime<Utc>,
+        payload: Value, // AnthropicMessageResponse or StreamEvent
+    }
+}
+
+lazy_static! {
+    static ref TRACE_FILE: Mutex<Option<PathBuf>> = Mutex::new(None);
+}
+
+pub fn set_trace_file(path: PathBuf) {
+    if let Ok(mut guard) = TRACE_FILE.lock() {
+        *guard = Some(path);
+    }
+}
+
+pub fn log_trace(event: TraceEvent) {
+    let path = {
+        let guard = TRACE_FILE.lock().unwrap();
+        guard.clone()
+    };
+
+    if let Some(p) = path {
+        if let Ok(line) = serde_json::to_string(&event) {
+            // Best effort write
+            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&p) {
+                let _ = writeln!(file, "{}", line);
+            }
+        }
+    }
 }
 
 pub fn log_request(req: &AnthropicMessageRequest, path: &Path) -> Result<()> {

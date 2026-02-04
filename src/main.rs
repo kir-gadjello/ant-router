@@ -1,4 +1,4 @@
-use anthropic_bridge::{config::Config, create_router, create_openai_router, handlers::AppState};
+use anthropic_bridge::{config::Config, create_router, create_openai_router, handlers::AppState, logging::set_trace_file};
 use anyhow::{Context, Result};
 use std::env;
 use std::fs;
@@ -123,6 +123,11 @@ async fn main() -> Result<()> {
 
     info!("Loading config from {}", config_path);
     let mut config = Config::load(&config_path).await?;
+
+    if let Some(trace_path) = &config.trace_file {
+        info!("Tracing enabled to file: {}", trace_path);
+        set_trace_file(std::path::PathBuf::from(trace_path));
+    }
 
     // Override profile from CLI or environment (Precedence: CLI > Env > Config)
     if let Some(profile) = cli_profile {

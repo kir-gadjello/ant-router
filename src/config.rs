@@ -45,6 +45,8 @@ pub struct Config {
     pub enable_exit_tool: bool,
     #[serde(default)]
     pub debug_tools: bool,
+    #[serde(default)]
+    pub trace_file: Option<String>,
 }
 
 fn default_log_enabled() -> bool {
@@ -571,6 +573,7 @@ impl Default for Config {
             system_prompts: Vec::new(),
             enable_exit_tool: true,
             debug_tools: false,
+            trace_file: None,
         }
     }
 }

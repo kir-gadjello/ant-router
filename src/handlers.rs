@@ -2,7 +2,8 @@ use crate::config::{
     glob_to_regex, merge_preprocess, ApiParams, Config, SystemPromptOp, SystemPromptRule,
     ToolFilterConfig,
 };
-use crate::logging::{log_request, record_interaction};
+use crate::logging::{log_request, record_interaction, log_trace, TraceEvent};
+use chrono::Utc;
 use crate::middleware::system_prompt::SystemPromptPatcherMiddleware;
 use crate::middleware::tool_enforcer::ToolEnforcerMiddleware;
 use crate::middleware::tool_filter::ToolFilterMiddleware;
@@ -173,6 +174,16 @@ pub async fn handle_messages(
         payload.model, request_features, target_logical_id, wire_model
     );
 
+    let request_id = format!("req_{}", uuid::Uuid::new_v4());
+
+    if state.config.trace_file.is_some() {
+        log_trace(TraceEvent::FrontendRequest {
+            id: request_id.clone(),
+            timestamp: Utc::now(),
+            payload: payload.clone(),
+        });
+    }
+
     // Convert Request
     let (openai_req, report) =
         match convert_request(payload.clone(), wire_model.clone(), Some(&model_conf), state.debug_tools) {
@@ -203,6 +214,14 @@ pub async fn handle_messages(
         }
     }
 
+    if state.config.trace_file.is_some() {
+        log_trace(TraceEvent::UpstreamRequest {
+            id: request_id.clone(),
+            timestamp: Utc::now(),
+            payload: openai_req.clone(),
+        });
+    }
+
     // Execute
     let url = format!("{}/v1/chat/completions", state.base_url);
     let response = match execute_upstream_request(&state, &url, final_body, &api_params).await {
@@ -220,16 +239,30 @@ pub async fn handle_messages(
             Box<dyn futures::Stream<Item = Result<AnthropicStreamEvent, anyhow::Error>> + Send>,
         > = Box::pin(anthropic_stream);
 
-        // Record interaction if enabled
-        if state.record {
+        let req_id_clone = request_id.clone();
+        let trace_enabled = state.config.trace_file.is_some();
+
+        // Record interaction if enabled OR tracing enabled
+        if state.record || trace_enabled {
              let req_clone = payload.clone();
              final_stream = Box::pin(record_stream(final_stream, move |accumulated_resp| {
                  let resp_value = serde_json::to_value(&accumulated_resp).unwrap_or(json!({"error": "Failed to serialize response"}));
-                 tokio::task::spawn_blocking(move || {
-                     if let Err(e) = record_interaction(&req_clone, &resp_value) {
-                         warn!("Failed to record interaction: {}", e);
-                     }
-                 });
+
+                 if trace_enabled {
+                     log_trace(TraceEvent::FrontendResponse {
+                         id: req_id_clone,
+                         timestamp: Utc::now(),
+                         payload: resp_value.clone(),
+                     });
+                 }
+
+                 if state.record {
+                    tokio::task::spawn_blocking(move || {
+                        if let Err(e) = record_interaction(&req_clone, &resp_value) {
+                            warn!("Failed to record interaction: {}", e);
+                        }
+                    });
+                 }
              }));
         }
 
@@ -270,6 +303,14 @@ pub async fn handle_messages(
             );
         }
 
+        if state.config.trace_file.is_some() {
+            log_trace(TraceEvent::UpstreamResponse {
+                id: request_id.clone(),
+                timestamp: Utc::now(),
+                payload: serde_json::to_value(&openai_resp).unwrap_or_default(),
+            });
+        }
+
         match convert_response(openai_resp, Some(&model_conf), state.debug_tools) {
             Ok(mut anthropic_resp) => {
                 for m in &middlewares {
@@ -283,12 +324,22 @@ pub async fn handle_messages(
                     }
                 }
 
+                let resp_value = serde_json::to_value(&anthropic_resp)
+                        .unwrap_or(json!({"error": "Failed to serialize response"}));
+
+                if state.config.trace_file.is_some() {
+                    log_trace(TraceEvent::FrontendResponse {
+                        id: request_id.clone(),
+                        timestamp: Utc::now(),
+                        payload: resp_value.clone(),
+                    });
+                }
+
                 if state.record {
                     let req_clone = payload.clone();
-                    let resp_value = serde_json::to_value(&anthropic_resp)
-                        .unwrap_or(json!({"error": "Failed to serialize response"}));
+                    let val_clone = resp_value.clone();
                     tokio::task::spawn_blocking(move || {
-                        if let Err(e) = record_interaction(&req_clone, &resp_value) {
+                        if let Err(e) = record_interaction(&req_clone, &val_clone) {
                             warn!("Failed to record interaction: {}", e);
                         }
                     });
