@@ -1,4 +1,4 @@
-use anthropic_bridge::config::{SystemPromptAction, SystemPromptRule, ToolFilterConfig};
+use anthropic_bridge::config::{SystemPromptOp, SystemPromptRule, ToolFilterConfig};
 use anthropic_bridge::middleware::{
     system_prompt::SystemPromptPatcherMiddleware, tool_enforcer::ToolEnforcerMiddleware,
     tool_filter::ToolFilterMiddleware, Middleware,
@@ -126,41 +126,7 @@ fn test_tool_filter_middleware() {
 }
 
 #[test]
-fn test_system_prompt_patcher_regex_replace() {
-    let mut req = AnthropicMessageRequest {
-        model: "claude-3-opus-20240229".to_string(),
-        messages: vec![],
-        max_tokens: None,
-        metadata: None,
-        stop_sequences: None,
-        stream: None,
-        system: Some(SystemPrompt::String("You are a helpful assistant.".to_string())),
-        temperature: None,
-        tool_choice: None,
-        tools: None,
-        top_k: None,
-        top_p: None,
-        thinking: None,
-    };
-
-    let rules = vec![SystemPromptRule {
-        name: "replace_rule".to_string(),
-        r#match: vec!["helpful assistant".to_string()],
-        action: SystemPromptAction::Replace("You are a grumpy cat.".to_string()),
-    }];
-
-    let middleware = SystemPromptPatcherMiddleware::new(rules);
-    middleware.on_request(&mut req).unwrap();
-
-    if let Some(SystemPrompt::String(s)) = req.system {
-        assert_eq!(s, "You are a grumpy cat.");
-    } else {
-        assert!(false, "System prompt should be a string");
-    }
-}
-
-#[test]
-fn test_system_prompt_patcher_move_to_user() {
+fn test_system_prompt_patcher_complex_pipeline() {
     let mut req = AnthropicMessageRequest {
         model: "claude-3-opus-20240229".to_string(),
         messages: vec![anthropic_bridge::protocol::AnthropicMessage {
@@ -171,7 +137,7 @@ fn test_system_prompt_patcher_move_to_user() {
         metadata: None,
         stop_sequences: None,
         stream: None,
-        system: Some(SystemPrompt::String("System Instructions".to_string())),
+        system: Some(SystemPrompt::String("You are a helpful assistant. INTERNAL_ID: 12345".to_string())),
         temperature: None,
         tool_choice: None,
         tools: None,
@@ -180,26 +146,96 @@ fn test_system_prompt_patcher_move_to_user() {
         thinking: None,
     };
 
+    // Case 2 from requirements: Regex Replace -> Prepend -> MoveToUser
     let rules = vec![SystemPromptRule {
-        name: "move_rule".to_string(),
-        r#match: vec![".*".to_string()],
-        action: SystemPromptAction::MoveToUser(Some("Simplified System".to_string())),
+        name: "complex_pipeline".to_string(),
+        r#match: vec!["helpful assistant".to_string()],
+        actions: vec![
+            SystemPromptOp::Replace {
+                pattern: "INTERNAL_ID: \\d+".to_string(),
+                with: "INTERNAL_ID: [REDACTED]".to_string(),
+            },
+            SystemPromptOp::Prepend {
+                value: "SYSTEM INSTRUCTIONS:".to_string(),
+            },
+            SystemPromptOp::MoveToUser {
+                forced_system_prompt: Some("You are a reasoning model.".to_string()),
+                prefix: Some("\n<hidden>".to_string()),
+                suffix: Some("</hidden>\n".to_string()),
+            }
+        ],
     }];
 
     let middleware = SystemPromptPatcherMiddleware::new(rules);
     middleware.on_request(&mut req).unwrap();
 
-    // Verify system prompt replaced
-    if let Some(SystemPrompt::String(s)) = req.system {
-        assert_eq!(s, "Simplified System");
+    // 1. Verify system prompt was replaced by forced_system_prompt
+    if let Some(SystemPrompt::String(s)) = &req.system {
+        assert_eq!(s, "You are a reasoning model.");
+    } else {
+        assert!(false, "System prompt should match forced_system_prompt");
     }
 
-    // Verify user message prepended
+    // 2. Verify User message contains the modified, wrapped, moved system prompt
     let user_msg = &req.messages[0];
     if let anthropic_bridge::protocol::AnthropicMessageContent::String(s) = &user_msg.content {
-        assert!(s.contains("System Instructions"));
+        // Expected buffer before wrap: "SYSTEM INSTRUCTIONS:\n\nYou are a helpful assistant. INTERNAL_ID: [REDACTED]"
+        // Wrapped: "\n<hidden>...expected...</hidden>\n"
+        // Prepended to "Hello": "\n<hidden>...expected...</hidden>\n\n\nHello" (double newline from inject)
+
+        assert!(s.contains("<hidden>"));
+        assert!(s.contains("SYSTEM INSTRUCTIONS:"));
+        assert!(s.contains("INTERNAL_ID: [REDACTED]")); // Regex worked
+        assert!(!s.contains("INTERNAL_ID: 12345")); // Original removed
+        assert!(s.contains("</hidden>"));
         assert!(s.contains("Hello"));
     } else {
         assert!(false, "User content should be string");
+    }
+}
+
+#[test]
+fn test_system_prompt_patcher_sequential_rules() {
+    let mut req = AnthropicMessageRequest {
+        model: "claude-3-opus-20240229".to_string(),
+        messages: vec![],
+        max_tokens: None,
+        metadata: None,
+        stop_sequences: None,
+        stream: None,
+        system: Some(SystemPrompt::String("Base System".to_string())),
+        temperature: None,
+        tool_choice: None,
+        tools: None,
+        top_k: None,
+        top_p: None,
+        thinking: None,
+    };
+
+    let rules = vec![
+        SystemPromptRule {
+            name: "rule1".to_string(),
+            r#match: vec!["Base".to_string()],
+            actions: vec![SystemPromptOp::Append { value: " + Rule1".to_string() }],
+        },
+        SystemPromptRule {
+            name: "rule2".to_string(),
+            r#match: vec!["Rule1".to_string()], // Matches because Rule1 modified it? No, match is done on *initial* content?
+            // Wait, middleware logic iterates rules. "current_system" is mutable buffer.
+            // If we match against mutable buffer, then sequential dependence exists.
+            // Requirement: "We need to flexibly match system prompts CONTENT per request"
+            // Usually matching happens against the *state at that moment*.
+            actions: vec![SystemPromptOp::Append { value: " + Rule2".to_string() }],
+        }
+    ];
+
+    let middleware = SystemPromptPatcherMiddleware::new(rules);
+    middleware.on_request(&mut req).unwrap();
+
+    if let Some(SystemPrompt::String(s)) = req.system {
+        // If sequential application and matching works on updated buffer:
+        // 1. "Base System" matches "Base" -> Becomes "Base System + Rule1"
+        // 2. "Base System + Rule1" matches "Rule1" -> Becomes "Base System + Rule1 + Rule2"
+        assert_eq!(s, "Base System\n\n + Rule1\n\n + Rule2");
     }
 }
