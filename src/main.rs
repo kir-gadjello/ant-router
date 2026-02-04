@@ -215,6 +215,8 @@ async fn main() -> Result<()> {
         .read_timeout(Duration::from_secs(300))
         .build()?;
 
+    let debug_tools = config.debug_tools;
+
     let state = Arc::new(AppState {
         config,
         client,
@@ -222,6 +224,7 @@ async fn main() -> Result<()> {
         api_key,
         verbose,
         tool_verbose,
+        debug_tools,
         record,
         tools_reported: AtomicBool::new(false),
     });

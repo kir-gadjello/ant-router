@@ -34,6 +34,7 @@ pub struct AppState {
     pub api_key: Option<String>,
     pub verbose: bool,
     pub tool_verbose: bool,
+    pub debug_tools: bool,
     pub record: bool,
     pub tools_reported: AtomicBool,
 }
@@ -174,7 +175,7 @@ pub async fn handle_messages(
 
     // Convert Request
     let (openai_req, report) =
-        match convert_request(payload.clone(), wire_model.clone(), Some(&model_conf)) {
+        match convert_request(payload.clone(), wire_model.clone(), Some(&model_conf), state.debug_tools) {
             Ok(res) => res,
             Err(e) => {
                 error!("Failed to convert request: {}", e);
@@ -213,7 +214,7 @@ pub async fn handle_messages(
     if payload.stream == Some(true) {
         let stream = response.bytes_stream();
         let openai_stream = parse_sse_stream(stream);
-        let anthropic_stream = convert_stream(openai_stream);
+        let anthropic_stream = convert_stream(openai_stream, state.debug_tools);
 
         let mut final_stream: std::pin::Pin<
             Box<dyn futures::Stream<Item = Result<AnthropicStreamEvent, anyhow::Error>> + Send>,
@@ -269,7 +270,7 @@ pub async fn handle_messages(
             );
         }
 
-        match convert_response(openai_resp, Some(&model_conf)) {
+        match convert_response(openai_resp, Some(&model_conf), state.debug_tools) {
             Ok(mut anthropic_resp) => {
                 for m in &middlewares {
                     if let Err(e) = m.on_response(&mut anthropic_resp) {
@@ -727,6 +728,9 @@ fn apply_openai_system_prompt_patch(
 
                         // Inject into User message
                         inject_into_openai_first_user_message(req, &moved_content);
+                    }
+                    SystemPromptOp::Delete => {
+                        current_system.clear();
                     }
                 }
             }

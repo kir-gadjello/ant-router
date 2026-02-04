@@ -75,7 +75,7 @@ fn test_profile_preprocess_override() {
         strict: None,
     })]);
 
-    let (openai_req, _) = convert_request(req, "test_model".to_string(), Some(&merged_config)).unwrap();
+    let (openai_req, _) = convert_request(req, "test_model".to_string(), Some(&merged_config), false).unwrap();
 
     // Check parallel tool calls disabled
     assert_eq!(openai_req.parallel_tool_calls, Some(false));

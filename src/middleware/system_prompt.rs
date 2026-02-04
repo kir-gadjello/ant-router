@@ -115,6 +115,10 @@ impl Middleware for SystemPromptPatcherMiddleware {
                             // Inject into User message
                             inject_into_first_user_message(req, &moved_content);
                         }
+                        SystemPromptOp::Delete => {
+                            // Clear the current system prompt buffer
+                            current_system.clear();
+                        }
                     }
                 }
             }

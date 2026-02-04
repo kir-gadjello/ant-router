@@ -22,3 +22,4 @@ pub trait Middleware: Send + Sync {
         stream
     }
 }
+mod system_prompt_test;

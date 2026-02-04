@@ -24,6 +24,7 @@ async fn spawn_app(config: Config) -> (String, MockServer) {
         api_key: Some("test-key".to_string()),
         verbose: false,
         tool_verbose: false,
+        debug_tools: false,
         record: false,
         tools_reported: AtomicBool::new(false),
     });

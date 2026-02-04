@@ -3,6 +3,7 @@ use crate::protocol::*;
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::collections::HashSet;
+use tracing::info;
 
 #[derive(Debug, Default, Clone)]
 pub struct PreprocessReport {
@@ -14,6 +15,7 @@ pub fn convert_request(
     mut req: AnthropicMessageRequest,
     resolved_model: String,
     model_config: Option<&ModelConfig>,
+    debug_tools: bool,
 ) -> Result<(OpenAIChatCompletionRequest, PreprocessReport)> {
     let mut report = PreprocessReport::default();
 
@@ -255,6 +257,10 @@ pub fn convert_request(
     if let Some(tools) = req.tools {
         let mut converted_tools = Vec::new();
         for tool_enum in tools {
+            if debug_tools {
+                 info!("[TOOL_DEBUG] Input Tool Definition: {}", serde_json::to_string(&tool_enum).unwrap_or_default());
+            }
+
             match tool_enum {
                 AnthropicTool::Anthropic(tool) => {
                     if tool.name == "BatchTool" {
@@ -293,7 +299,7 @@ pub fn convert_request(
                         }
                     }
 
-                    converted_tools.push(OpenAITool {
+                    let openai_tool = OpenAITool {
                         r#type: "function".to_string(),
                         function: OpenAIFunction {
                             name: tool.name,
@@ -301,11 +307,20 @@ pub fn convert_request(
                             parameters: schema,
                             strict,
                         },
-                    });
+                    };
+
+                    if debug_tools {
+                        info!("[TOOL_DEBUG] Converted Tool Definition: {}", serde_json::to_string(&openai_tool).unwrap_or_default());
+                    }
+
+                    converted_tools.push(openai_tool);
                 }
                 AnthropicTool::OpenAI(mut tool) => {
                     // Pass through OpenAI tools, but still clean up schema if needed
                     remove_uri_format(&mut tool.function.parameters);
+                    if debug_tools {
+                        info!("[TOOL_DEBUG] Converted Tool Definition (Pass-through): {}", serde_json::to_string(&tool).unwrap_or_default());
+                    }
                     converted_tools.push(tool);
                 }
             }

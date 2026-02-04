@@ -43,6 +43,8 @@ pub struct Config {
     pub system_prompts: Vec<SystemPromptRule>,
     #[serde(default = "default_true")]
     pub enable_exit_tool: bool,
+    #[serde(default)]
+    pub debug_tools: bool,
 }
 
 fn default_log_enabled() -> bool {
@@ -146,6 +148,8 @@ pub enum SystemPromptOp {
         prefix: Option<String>,
         suffix: Option<String>,
     },
+    #[serde(rename = "delete")]
+    Delete,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -566,6 +570,7 @@ impl Default for Config {
             tool_filters: None,
             system_prompts: Vec::new(),
             enable_exit_tool: true,
+            debug_tools: false,
         }
     }
 }
