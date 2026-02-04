@@ -331,7 +331,7 @@ pub fn convert_request(
         }
     }
 
-    Ok((OpenAIChatCompletionRequest {
+    let mut initial_req = OpenAIChatCompletionRequest {
         model: resolved_model,
         messages: openai_messages,
         temperature: req.temperature,
@@ -345,7 +345,20 @@ pub fn convert_request(
         frequency_penalty: None,
         user: None,
         reasoning,
-    }, report))
+    };
+
+    // Apply Overrides
+    if let Some(overrides) = model_config.and_then(|c| c.r#override.as_ref()) {
+        let mut req_val = serde_json::to_value(&initial_req)?;
+        if let Some(req_obj) = req_val.as_object_mut() {
+            for (k, v) in overrides {
+                req_obj.insert(k.clone(), v.clone());
+            }
+        }
+        initial_req = serde_json::from_value(req_val)?;
+    }
+
+    Ok((initial_req, report))
 }
 
 fn preprocess_messages(req: &mut AnthropicMessageRequest, config: &PreprocessConfig) -> PreprocessReport {

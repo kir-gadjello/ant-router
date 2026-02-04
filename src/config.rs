@@ -186,6 +186,9 @@ pub struct ModelConfig {
     pub override_max_tokens: Option<Value>,
 
     #[serde(default)]
+    pub r#override: Option<HashMap<String, Value>>,
+
+    #[serde(default)]
     pub preprocess: Option<PreprocessConfig>,
 
     #[serde(default)]
@@ -381,8 +384,21 @@ fn merge_models(parent: ModelConfig, child: ModelConfig) -> ModelConfig {
         force_reasoning: child.force_reasoning.or(parent.force_reasoning),
         max_tokens: child.max_tokens.or(parent.max_tokens),
         override_max_tokens: child.override_max_tokens.or(parent.override_max_tokens),
+        r#override: merge_overrides(parent.r#override, child.r#override),
         preprocess: merge_preprocess(parent.preprocess, child.preprocess),
         api_params: merge_api_params(parent.api_params, child.api_params),
+    }
+}
+
+fn merge_overrides(
+    parent: Option<HashMap<String, Value>>,
+    child: Option<HashMap<String, Value>>,
+) -> Option<HashMap<String, Value>> {
+    match (parent, child) {
+        (None, None) => None,
+        (Some(p), None) => Some(p),
+        (None, Some(c)) => Some(c),
+        (Some(p), Some(c)) => Some(deep_merge_json(p, c)),
     }
 }
 
