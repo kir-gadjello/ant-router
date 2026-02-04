@@ -1,7 +1,7 @@
 use super::{Middleware, StreamBox};
 use crate::protocol::{
     AnthropicContentBlock, AnthropicDelta, AnthropicMessageRequest, AnthropicMessageResponse,
-    AnthropicStreamEvent, AnthropicTool,
+    AnthropicStreamEvent, AnthropicTool, AnthropicToolChoice,
 };
 use anyhow::Result;
 use async_stream::stream;
@@ -36,25 +36,17 @@ impl ToolEnforcerMiddleware {
 
 impl Middleware for ToolEnforcerMiddleware {
     fn on_request(&self, req: &mut AnthropicMessageRequest) -> Result<()> {
-        // Only inject if tools are already present or we want to force tool use
-        // The requirement is to inject it. Let's assume we inject it if tools are present,
-        // or maybe we should always inject it if this middleware is active?
-        // Assuming if tools are enabled, we inject it.
-
+        // Only inject if tools are already present
         if let Some(tools) = &mut req.tools {
             // Check if ExitTool already exists to avoid duplication
             if !tools.iter().any(|t| t.name == "ExitTool") {
                 tools.push(self.get_exit_tool_def());
             }
-        } else {
-            // If no tools are defined, maybe we shouldn't inject ExitTool?
-            // Or should we? If the model supports tools, we might want to enabling it.
-            // But if the user didn't ask for tools, adding one might confuse the model
-            // or change pricing (token usage).
-            // Let's safe-guard: only add if tools list is not empty or Some.
-            // But wait, the user might want to use ExitTool even if they didn't define other tools
-            // (unlikely scenario for a Router, usually Router adds it to manage sub-agents).
-            // I'll stick to: if `tools` is Some, append it.
+
+            // Force tool choice if not already specific
+            if req.tool_choice.is_none() || matches!(req.tool_choice, Some(AnthropicToolChoice::Auto)) {
+                 req.tool_choice = Some(AnthropicToolChoice::Any);
+            }
         }
 
         Ok(())
