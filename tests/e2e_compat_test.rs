@@ -10,6 +10,7 @@ use tower::util::ServiceExt;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::fs;
 use serde_json::json;
 
@@ -30,6 +31,8 @@ async fn test_e2e_chat_compat() {
         base_url: mock_server.uri(),
         api_key: Some("test-key".to_string()),
         verbose: true,
+        tool_verbose: false,
+        tools_reported: AtomicBool::new(false),
     });
     let app = create_router(state);
 
@@ -101,6 +104,7 @@ async fn test_e2e_tool_compat() {
     let mut config = Config::load("tests/config_test_e2e.yaml").await.unwrap();
     config.upstream.base_url = Some(mock_server.uri());
     
+    // 3. Setup Router
     let client = reqwest::Client::builder().build().unwrap();
     let state = Arc::new(AppState {
         config,
@@ -108,6 +112,8 @@ async fn test_e2e_tool_compat() {
         base_url: mock_server.uri(),
         api_key: Some("test-key".to_string()),
         verbose: true,
+        tool_verbose: false,
+        tools_reported: AtomicBool::new(false),
     });
     let app = create_router(state);
 
@@ -198,6 +204,8 @@ async fn test_min_reasoning_injection() {
         base_url: mock_server.uri(),
         api_key: Some("test-key".to_string()),
         verbose: true,
+        tool_verbose: false,
+        tools_reported: AtomicBool::new(false),
     });
     let app = create_router(state);
 

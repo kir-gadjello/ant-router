@@ -12,12 +12,13 @@ use axum::{
 };
 use bytes::BytesMut;
 use futures::StreamExt;
+use regex::Regex;
 use reqwest::Client;
 use serde_json::{json, Value};
-use std::env;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 pub struct AppState {
     pub config: Config,
@@ -25,6 +26,8 @@ pub struct AppState {
     pub base_url: String,
     pub api_key: Option<String>,
     pub verbose: bool,
+    pub tool_verbose: bool,
+    pub tools_reported: AtomicBool,
 }
 
 pub async fn health_check() -> impl IntoResponse {
@@ -66,7 +69,6 @@ pub async fn handle_messages(
     if thinking_enabled {
         request_features.push("reasoning");
     }
-    // "vision_reasoning" is implied if both present, but we check presence in match_features
 
     // 2. Resolve Model Configuration
     let profile_name = &state.config.current_profile;
@@ -77,8 +79,7 @@ pub async fn handle_messages(
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({"error": format!("Profile '{}' not found", profile_name)})),
-            )
-                .into_response();
+            ).into_response();
         }
     };
 
@@ -107,33 +108,24 @@ pub async fn handle_messages(
     );
 
     // 4. Transform Request
-    let openai_req = match convert_request(payload.clone(), wire_model.clone(), model_conf) {
-        Ok(req) => req,
+    let (openai_req, report) = match convert_request(payload.clone(), wire_model.clone(), model_conf) {
+        Ok(res) => res,
         Err(e) => {
             error!("Failed to convert request: {}", e);
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({"error": format!("Invalid request: {}", e)})),
-            )
-                .into_response();
+            ).into_response();
         }
     };
 
+    // Tool Verbose Reporting (Once per session)
+    if state.tool_verbose {
+        report_tools_once(&state, &report);
+    }
+
     // 5. Prepare Upstream Request
     let url = format!("{}/v1/chat/completions", state.base_url);
-
-    let mut req_builder = state.client.post(&url);
-
-    if let Some(key) = &state.api_key {
-        req_builder = req_builder.header("Authorization", format!("Bearer {}", key));
-    }
-
-    if let Some(params) = &api_params {
-        for (k, v) in &params.headers {
-            req_builder = req_builder.header(k, v);
-        }
-    }
-
     let mut final_body = serde_json::to_value(&openai_req).unwrap();
     if let Some(params) = &api_params {
         if !params.extra_body.is_empty() {
@@ -147,7 +139,6 @@ pub async fn handle_messages(
 
     // --- VERBOSE LOGGING START ---
     if state.verbose {
-        // Create a truncated copy for logging
         let mut log_body = final_body.clone();
         truncate_long_strings(&mut log_body);
         info!("Upstream Request Body: {}", serde_json::to_string_pretty(&log_body).unwrap_or_default());
@@ -159,14 +150,12 @@ pub async fn handle_messages(
     let backoff = api_params.as_ref().and_then(|p| p.retry.as_ref()).map(|r| r.backoff_ms).unwrap_or(500);
 
     let mut attempts = 0;
+    let mut context_length_retries = 0;
+    let max_context_retries = 1;
+
     let response = loop {
         attempts += 1;
-        // Clone request builder for retry? Reqwest builders are consumed.
-        // We need to rebuild or clone. Cloning builder requires `clone()` which `RequestBuilder` supports.
-        // But we already added body which might not be cloneable easily if stream?
-        // `json(&final_body)` sets body. `final_body` is `Value`.
-        // We can rebuild easily since we have all components.
-
+        
         let mut attempt_builder = state.client.post(&url);
         if let Some(key) = &state.api_key {
             attempt_builder = attempt_builder.header("Authorization", format!("Bearer {}", key));
@@ -180,12 +169,42 @@ pub async fn handle_messages(
 
         match attempt_builder.send().await {
             Ok(res) => {
-                if res.status().is_server_error() && attempts <= max_retries {
-                    warn!("Upstream server error {}, retrying ({}/{})", res.status(), attempts, max_retries);
+                let status = res.status();
+                if status.is_server_error() && attempts <= max_retries {
+                    warn!("Upstream server error {}, retrying ({}/{})", status, attempts, max_retries);
                     tokio::time::sleep(Duration::from_millis(backoff * (2_u64.pow(attempts - 1)))).await;
                     continue;
                 }
-                break Ok(res);
+                
+                if status == StatusCode::BAD_REQUEST && context_length_retries < max_context_retries {
+                    let error_bytes = res.bytes().await.unwrap_or_default();
+                    let error_text = String::from_utf8_lossy(&error_bytes);
+                    
+                    // Regex to parse OpenRouter context length error:
+                    // "This endpoint's maximum context length is 256000 tokens. However, you requested about 256003 tokens (3 of text input, 256000 in the output)."
+                    let re = Regex::new(r"maximum context length is (\d+) tokens.*\((\d+) of text input").unwrap();
+                    if let Some(caps) = re.captures(&error_text) {
+                        if let (Some(max_ctx), Some(input_tokens)) = (caps.get(1), caps.get(2)) {
+                            if let (Ok(max_ctx_val), Ok(input_val)) = (max_ctx.as_str().parse::<u32>(), input_tokens.as_str().parse::<u32>()) {
+                                info!("Caught context length error. Max: {}, Input: {}. Adjusting max_tokens and retrying.", max_ctx_val, input_val);
+                                let safety_margin = 100;
+                                let available = max_ctx_val.saturating_sub(input_val).saturating_sub(safety_margin);
+                                if available > 0 {
+                                    if let Value::Object(ref mut map) = final_body {
+                                        map.insert("max_tokens".to_string(), json!(available));
+                                    }
+                                    context_length_retries += 1;
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                    error!("Upstream 400 Bad Request: {}", error_text);
+                    let error_body: Value = serde_json::from_slice(&error_bytes).unwrap_or(json!({"error": error_text}));
+                    return (StatusCode::BAD_REQUEST, Json(error_body)).into_response();
+                }
+                
+                break res;
             }
             Err(e) => {
                 if attempts <= max_retries {
@@ -193,19 +212,8 @@ pub async fn handle_messages(
                     tokio::time::sleep(Duration::from_millis(backoff * (2_u64.pow(attempts - 1)))).await;
                     continue;
                 }
-                break Err(e);
+                return (StatusCode::BAD_GATEWAY, Json(json!({"error": e.to_string()}))).into_response();
             }
-        }
-    };
-
-    let response = match response {
-        Ok(res) => res,
-        Err(e) => {
-            error!("Upstream request failed after retries: {}", e);
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(json!({"error": e.to_string()})),
-            ).into_response();
         }
     };
 
@@ -213,19 +221,17 @@ pub async fn handle_messages(
         let status = response.status();
         let error_text = response.text().await.unwrap_or_default();
         error!("Upstream error {}: {}", status, error_text);
-        let error_body =
-            serde_json::from_str::<Value>(&error_text).unwrap_or(json!({"error": error_text}));
+        let error_body = serde_json::from_str::<Value>(&error_text).unwrap_or(json!({"error": error_text}));
         return (status, Json(error_body)).into_response();
     }
 
     // 7. Handle Response
     if payload.stream == Some(true) {
         let stream = response.bytes_stream();
-
         let openai_stream = parse_sse_stream(stream);
         let anthropic_stream = convert_stream(openai_stream);
 
-        let sse_stream = Box::pin(anthropic_stream.map(|res| {
+        let sse_stream = Box::pin(anthropic_stream.map(|res: Result<AnthropicStreamEvent, anyhow::Error>| {
             match res {
                 Ok(event) => {
                     let event_type = get_event_type(&event);
@@ -237,19 +243,13 @@ pub async fn handle_messages(
             }
         }));
 
-        let sse = Sse::new(sse_stream).keep_alive(KeepAlive::default());
-
-        sse.into_response()
+        Sse::new(sse_stream).keep_alive(KeepAlive::default()).into_response()
     } else {
         let openai_resp: OpenAIChatCompletionResponse = match response.json().await {
             Ok(r) => r,
             Err(e) => {
                 error!("Failed to parse upstream response: {}", e);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": "Failed to parse upstream response"})),
-                )
-                    .into_response();
+                return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "Failed to parse upstream response"}))).into_response();
             }
         };
 
@@ -257,21 +257,39 @@ pub async fn handle_messages(
             let mut log_resp = serde_json::to_value(&openai_resp).unwrap_or_default();
             truncate_long_strings(&mut log_resp);
             info!("Upstream Response Body: {}", serde_json::to_string_pretty(&log_resp).unwrap_or_default());
-        } else if env::var("DEBUG").is_ok() {
-            debug!("Upstream Response: {:?}", openai_resp);
         }
 
         match convert_response(openai_resp) {
             Ok(anthropic_resp) => (StatusCode::OK, Json(anthropic_resp)).into_response(),
             Err(e) => {
                 error!("Failed to convert response: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": e.to_string()})),
-                )
-                    .into_response()
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response()
             }
         }
+    }
+}
+
+fn report_tools_once(state: &AppState, report: &crate::transformer::request::PreprocessReport) {
+    if !state.tools_reported.swap(true, Ordering::Relaxed) {
+        info!("--- Tool Sanitization Report (First Request) ---");
+        if report.sanitized_tool_ids.is_empty() {
+            info!("No tools were removed during sanitization.");
+        } else {
+            info!("The following tool IDs were removed due to invalid definitions (empty names):");
+            for id in &report.sanitized_tool_ids {
+                info!(" - {}", id);
+            }
+        }
+        
+        if report.passed_tool_ids.is_empty() {
+            info!("No tools passed sanitization (none provided or all removed).");
+        } else {
+            info!("The following tool IDs passed sanitization:");
+            for id in &report.passed_tool_ids {
+                info!(" - {}", id);
+            }
+        }
+        info!("----------------------------------------------");
     }
 }
 

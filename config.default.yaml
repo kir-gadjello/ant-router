@@ -72,18 +72,21 @@ models:
     # Force reasoning: ensures reasoning is enabled with a specific effort level.
     # Supported values: true (default low), false (none), "low", "medium", "high", or integer (token budget).
     force_reasoning: high
-    
+    #override_max_tokens: auto
+
     capabilities:
       reasoning: true
-    
+      max_output_tokens: 256k
+      max_context_tokens: 256k
+
     # Preprocessing options to fix upstream compatibility issues
     preprocess:
       # Merges multiple system messages into one (needed for some providers)
       merge_system_messages: true
       # Filters out tool calls with empty names and deduplicates tool IDs
-      sanitize_tool_history: true
+      # sanitize_tool_history: true
       # Caps the maximum output tokens to a safe limit (or use "auto" to unset it)
-      max_output_tokens: "auto"
+      # max_output_tokens: "auto"
 
   # Vision Models (Z-AI GLM)
   "glm-4d6-v":

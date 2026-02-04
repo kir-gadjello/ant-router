@@ -5,6 +5,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{info, warn, Level};
@@ -37,7 +38,9 @@ async fn main() -> Result<()> {
     // CLI Args parsing
     let mut cli_port = None;
     let mut cli_host = None;
+    let mut cli_profile = None;
     let mut verbose = false;
+    let mut tool_verbose = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -62,8 +65,17 @@ async fn main() -> Result<()> {
                     i += 1;
                 }
             }
+            "--profile" | "-P" => {
+                if i + 1 < args.len() {
+                    cli_profile = Some(args[i + 1].clone());
+                    i += 1;
+                }
+            }
             "-v" | "--verbose" => {
                 verbose = true;
+            }
+            "-tv" => {
+                tool_verbose = true;
             }
             _ => {}
         }
@@ -106,7 +118,16 @@ async fn main() -> Result<()> {
     }
 
     info!("Loading config from {}", config_path);
-    let config = Config::load(&config_path).await?;
+    let mut config = Config::load(&config_path).await?;
+
+    // Override profile from CLI or environment (Precedence: CLI > Env > Config)
+    if let Some(profile) = cli_profile {
+        info!("Overriding profile from CLI: {}", profile);
+        config.current_profile = profile;
+    } else if let Ok(profile) = env::var("PROFILE") {
+        info!("Overriding profile from PROFILE env var: {}", profile);
+        config.current_profile = profile;
+    }
 
     // Ensure log directory exists if logging is enabled
     if config.log_enabled {
@@ -188,6 +209,8 @@ async fn main() -> Result<()> {
         base_url,
         api_key,
         verbose,
+        tool_verbose,
+        tools_reported: AtomicBool::new(false),
     });
 
     // 5. Router

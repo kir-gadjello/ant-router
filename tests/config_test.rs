@@ -7,7 +7,7 @@ async fn test_default_config_parsing() {
     let content = std::fs::read_to_string("config.default.yaml").unwrap();
     let config: Config = serde_yaml::from_str(&content).unwrap();
 
-    assert_eq!(config.server.host, Some("0.0.0.0".to_string()));
+    assert_eq!(config.server.host, Some("127.0.0.1".to_string()));
     assert_eq!(config.server.port, Some(3000));
     assert_eq!(config.upstream.base_url, Some("https://openrouter.ai/api".to_string()));
     assert!(config.log_enabled);

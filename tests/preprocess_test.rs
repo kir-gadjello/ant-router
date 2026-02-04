@@ -4,12 +4,13 @@ use anthropic_bridge::handlers::AppState;
 use anthropic_bridge::protocol::{OpenAIChatCompletionRequest};
 use axum::{
     body::Body,
-    http::{Request, StatusCode},
+    http::Request,
 };
 use tower::util::ServiceExt;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::method;
 use wiremock::{Mock, MockServer, ResponseTemplate};
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use serde_json::json;
 
 #[tokio::test]
@@ -42,6 +43,8 @@ async fn test_preprocess_merge_sysmsgs() {
         base_url: mock_server.uri(),
         api_key: Some("k".to_string()),
         verbose: true,
+        tool_verbose: false,
+        tools_reported: AtomicBool::new(false),
     });
     let app = create_router(state);
 
@@ -111,6 +114,8 @@ async fn test_preprocess_sanitize_tool_history() {
         base_url: mock_server.uri(),
         api_key: Some("k".to_string()),
         verbose: true,
+        tool_verbose: false,
+        tools_reported: AtomicBool::new(false),
     });
     let app = create_router(state);
 
@@ -223,6 +228,8 @@ async fn test_max_output_cap() {
         base_url: mock_server.uri(),
         api_key: Some("k".to_string()),
         verbose: true,
+        tool_verbose: false,
+        tools_reported: AtomicBool::new(false),
     });
     let app = create_router(state);
 
@@ -279,6 +286,8 @@ async fn test_max_tokens_override() {
         base_url: mock_server.uri(),
         api_key: Some("k".to_string()),
         verbose: true,
+        tool_verbose: false,
+        tools_reported: AtomicBool::new(false),
     });
     let app = create_router(state);
 
@@ -338,6 +347,8 @@ async fn test_max_output_tokens_auto() {
         base_url: mock_server.uri(),
         api_key: Some("k".to_string()),
         verbose: true,
+        tool_verbose: false,
+        tools_reported: AtomicBool::new(false),
     });
     let app = create_router(state);
 
@@ -365,4 +376,66 @@ async fn test_max_output_tokens_auto() {
     let r: OpenAIChatCompletionRequest = serde_json::from_slice(&reqs[0].body).unwrap();
     
     assert_eq!(r.max_tokens, None);
+}
+
+#[tokio::test]
+async fn test_override_max_tokens_auto() {
+    let mock_server = MockServer::start().await;
+    
+    let mut config = Config::default();
+    config.models.insert("override_auto".to_string(), ModelConfig {
+        api_model_id: Some("test".to_string()),
+        override_max_tokens: Some(json!("auto")),
+        capabilities: Some(anthropic_bridge::config::Capabilities {
+            max_output_tokens: Some(json!(123)),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    config.profiles.insert("test".to_string(), anthropic_bridge::config::Profile {
+        rules: vec![anthropic_bridge::config::Rule {
+            pattern: "test".to_string(),
+            target: "override_auto".to_string(),
+            match_features: vec![],
+            reasoning_target: None,
+        }],
+    });
+    config.current_profile = "test".to_string();
+    config.upstream.base_url = Some(mock_server.uri());
+
+    let state = Arc::new(AppState {
+        config,
+        client: reqwest::Client::new(),
+        base_url: mock_server.uri(),
+        api_key: Some("k".to_string()),
+        verbose: true,
+        tool_verbose: false,
+        tools_reported: AtomicBool::new(false),
+    });
+    let app = create_router(state);
+
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "1", "choices": [{"message": {"role": "assistant", "content": "ok"}, "index": 0}]
+        })))
+        .mount(&mock_server)
+        .await;
+
+    app.oneshot(Request::builder()
+        .uri("/v1/messages")
+        .method("POST")
+        .header("Content-Type", "application/json")
+        .body(Body::from(json!({
+            "model": "test",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 1000
+        }).to_string()))
+        .unwrap())
+        .await
+        .unwrap();
+
+    let reqs = mock_server.received_requests().await.unwrap();
+    let r: OpenAIChatCompletionRequest = serde_json::from_slice(&reqs[0].body).unwrap();
+    
+    assert_eq!(r.max_tokens, Some(123));
 }

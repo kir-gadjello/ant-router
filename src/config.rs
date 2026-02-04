@@ -57,20 +57,14 @@ pub struct UpstreamConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct Profile {
     pub rules: Vec<Rule>,
-    // Removed old vision routing fields
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Rule {
     pub pattern: String,
-    // match_features replaces reasoning_target and ant_vision fields
     #[serde(default)]
-    pub match_features: Vec<String>, // e.g. ["vision", "reasoning"]
+    pub match_features: Vec<String>,
     pub target: String,
-    // Keep reasoning_target as optional fallback/shorthand if needed, but per prompt we prefer match_features logic
-    // Prompt: "if no reasoning_target is defined use same model as target... functionality now should be handled by match_features"
-    // So we can remove reasoning_target OR keep it for legacy compat.
-    // I'll keep it deprecated/optional but primary logic uses match_features.
     pub reasoning_target: Option<String>,
 }
 
@@ -107,22 +101,18 @@ pub struct ModelConfig {
     #[serde(default)]
     pub capabilities: Option<Capabilities>,
 
-    // New Reasoning Configuration
-    /// Enforce minimum reasoning requirements. 
-    /// If client doesn't request reasoning, this is applied.
-    /// If client requests lower budget than this (if budget), it is upgraded.
     #[serde(default)]
     pub min_reasoning: Option<ReasoningConfig>,
     
-    /// Force specific reasoning settings, overriding client request.
     #[serde(default)]
     pub force_reasoning: Option<ReasoningConfig>,
 
-    /// Override or set default max_tokens for this model.
     #[serde(default)]
     pub max_tokens: Option<u32>,
 
-    // Request Preprocessing Options
+    #[serde(default)]
+    pub override_max_tokens: Option<Value>,
+
     #[serde(default)]
     pub preprocess: Option<PreprocessConfig>,
 
@@ -136,21 +126,17 @@ pub struct PreprocessConfig {
     pub merge_system_messages: Option<bool>,
     #[serde(default)]
     pub sanitize_tool_history: Option<bool>,
-    /// Cap output tokens. Use "auto" to use model default, or a number.
     #[serde(default)]
     pub max_output_tokens: Option<Value>,
     #[serde(default)]
-    pub max_output_cap: Option<u32>, // Deprecated in favor of max_output_tokens, but keeping for compatibility if used
+    pub max_output_cap: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
 #[serde(untagged)]
 pub enum ReasoningConfig {
-    /// Enable (true="low" for min, "medium" for force) or Disable (false="none")
     Bool(bool),
-    /// Specific effort level ("low", "medium", "high")
     Level(String), 
-    /// Token budget (maps to "max_tokens")
     Budget(u32),   
 }
 
@@ -168,6 +154,10 @@ pub struct Capabilities {
     pub tools: Option<bool>,
     #[serde(default)]
     pub reasoning: Option<ReasoningCapability>,
+    #[serde(default)]
+    pub max_context_tokens: Option<Value>,
+    #[serde(default)]
+    pub max_output_tokens: Option<Value>,
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
@@ -187,7 +177,6 @@ pub struct ApiParams {
     pub headers: HashMap<String, String>,
     #[serde(default)]
     pub extra_body: HashMap<String, Value>,
-    // Added retry config
     pub retry: Option<RetryConfig>,
 }
 
@@ -308,7 +297,6 @@ impl Config {
     }
 }
 
-// Merging Logic
 fn merge_models(parent: ModelConfig, child: ModelConfig) -> ModelConfig {
     ModelConfig {
         extends: child.extends,
@@ -320,6 +308,7 @@ fn merge_models(parent: ModelConfig, child: ModelConfig) -> ModelConfig {
         min_reasoning: child.min_reasoning.or(parent.min_reasoning),
         force_reasoning: child.force_reasoning.or(parent.force_reasoning),
         max_tokens: child.max_tokens.or(parent.max_tokens),
+        override_max_tokens: child.override_max_tokens.or(parent.override_max_tokens),
         preprocess: merge_preprocess(parent.preprocess, child.preprocess),
         api_params: merge_api_params(parent.api_params, child.api_params),
     }
@@ -369,7 +358,24 @@ fn merge_capabilities(
             vision: c.vision.or(p.vision),
             tools: c.tools.or(p.tools),
             reasoning: c.reasoning.or(p.reasoning),
+            max_context_tokens: c.max_context_tokens.or(p.max_context_tokens),
+            max_output_tokens: c.max_output_tokens.or(p.max_output_tokens),
         }),
+    }
+}
+
+pub fn parse_token_count(v: &Value) -> Option<u32> {
+    match v {
+        Value::Number(n) => n.as_u64().map(|u| u as u32),
+        Value::String(s) => {
+            let s = s.trim().to_lowercase();
+            if let Some(stripped) = s.strip_suffix('k') {
+                stripped.parse::<f64>().ok().map(|n| (n * 1000.0) as u32)
+            } else {
+                s.parse::<u32>().ok()
+            }
+        },
+        _ => None
     }
 }
 
@@ -426,27 +432,12 @@ fn deep_merge_json(
     result
 }
 
-// Improved glob regex helper
 pub fn glob_to_regex(pattern: &str) -> Result<Regex, regex::Error> {
-    // If pattern starts with ^ or ends with $, assume it's already a Regex (simplified check)
-    // OR if it contains .* which is regex-ish.
-    // Ideally we assume Glob unless specified.
-    // Fix for the bug: `.*` pattern.
-    // If pattern is exactly `.*`, treat as match-all regex.
     if pattern == ".*" {
         return Regex::new("(?i)^.*$");
     }
-
-    // Standard Glob -> Regex
-    // Escape everything except *
     let escaped = regex::escape(pattern);
-    // Unescape * (it became \*) and replace with .*
     let regex_pattern = escaped.replace("\\*", ".*");
-
-    // For the bug case `.*` -> `\.\*` -> `\..*` which matches dot-star.
-    // We want `*` to be match all.
-    // If pattern is `*`, `escape` -> `\*`, replace -> `.*`. Correct.
-
     let final_pattern = format!("(?i)^{}$", regex_pattern);
     Regex::new(&final_pattern)
 }
@@ -465,5 +456,21 @@ impl Default for Config {
             server: ServerConfig::default(),
             upstream: UpstreamConfig::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_parse_token_count() {
+        assert_eq!(parse_token_count(&json!(1000)), Some(1000));
+        assert_eq!(parse_token_count(&json!("2000")), Some(2000));
+        assert_eq!(parse_token_count(&json!("1k")), Some(1000));
+        assert_eq!(parse_token_count(&json!("1.5k")), Some(1500));
+        assert_eq!(parse_token_count(&json!("128K")), Some(128000));
+        assert_eq!(parse_token_count(&json!("invalid")), None);
     }
 }

@@ -7,6 +7,7 @@ use anthropic_bridge::{
 use reqwest::Client;
 use serde_json::json;
 use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use wiremock::matchers::{method, path};
@@ -22,6 +23,8 @@ async fn spawn_app(config: Config) -> (String, MockServer) {
         base_url: mock_server.uri(),
         api_key: Some("test-key".to_string()),
         verbose: false,
+        tool_verbose: false,
+        tools_reported: AtomicBool::new(false),
     });
 
     let app = create_router(app_state);

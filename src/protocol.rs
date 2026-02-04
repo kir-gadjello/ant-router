@@ -102,6 +102,8 @@ pub struct AnthropicTool {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub input_schema: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_examples: Option<Vec<Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,6 +124,8 @@ pub enum AnthropicToolChoice {
     Any,
     #[serde(rename = "tool")]
     Tool { name: String },
+    #[serde(rename = "none")]
+    None,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,26 +1,47 @@
-use crate::config::{ModelConfig, ReasoningConfig, PreprocessConfig};
+use crate::config::{ModelConfig, ReasoningConfig, PreprocessConfig, parse_token_count};
 use crate::protocol::*;
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::collections::HashSet;
 
+#[derive(Debug, Default, Clone)]
+pub struct PreprocessReport {
+    pub sanitized_tool_ids: Vec<String>,
+    pub passed_tool_ids: Vec<String>,
+}
+
 pub fn convert_request(
     mut req: AnthropicMessageRequest,
     resolved_model: String,
     model_config: Option<&ModelConfig>,
-) -> Result<OpenAIChatCompletionRequest> {
+) -> Result<(OpenAIChatCompletionRequest, PreprocessReport)> {
+    let mut report = PreprocessReport::default();
+
     // Preprocessing
     if let Some(conf) = model_config.and_then(|c| c.preprocess.as_ref()) {
-        preprocess_messages(&mut req, conf);
-        
-        // Max Output Logic
-        
-        // 1. Model Config Override (Highest priority if strictly set in config root, but here we access via conf... wait, max_tokens is on ModelConfig, not PreprocessConfig)
-        // Access model_config directly
+        report = preprocess_messages(&mut req, conf);
     }
     
     if let Some(mc) = model_config {
-        if let Some(override_val) = mc.max_tokens {
+        // Task 2: override_max_tokens logic
+        if let Some(override_val) = &mc.override_max_tokens {
+            match override_val {
+                Value::String(s) if s == "auto" => {
+                    // Set to max_output_tokens from capabilities
+                    if let Some(cap_max) = mc.capabilities.as_ref().and_then(|c| c.max_output_tokens.as_ref()) {
+                        if let Some(val) = parse_token_count(cap_max) {
+                            req.max_tokens = Some(val);
+                        }
+                    }
+                },
+                _ => {
+                    if let Some(val) = parse_token_count(override_val) {
+                        req.max_tokens = Some(val);
+                    }
+                }
+            }
+        } else if let Some(override_val) = mc.max_tokens {
+            // Fallback to simple max_tokens override
             req.max_tokens = Some(override_val);
         }
         
@@ -260,6 +281,7 @@ pub fn convert_request(
             "type": "function",
             "function": { "name": name }
         }),
+        AnthropicToolChoice::None => json!("none"),
     });
 
     // Handle Reasoning/Thinking Mapping
@@ -305,7 +327,7 @@ pub fn convert_request(
         }
     }
 
-    Ok(OpenAIChatCompletionRequest {
+    Ok((OpenAIChatCompletionRequest {
         model: resolved_model,
         messages: openai_messages,
         temperature: req.temperature,
@@ -319,10 +341,12 @@ pub fn convert_request(
         frequency_penalty: None,
         user: None,
         reasoning,
-    })
+    }, report))
 }
 
-fn preprocess_messages(req: &mut AnthropicMessageRequest, config: &PreprocessConfig) {
+fn preprocess_messages(req: &mut AnthropicMessageRequest, config: &PreprocessConfig) -> PreprocessReport {
+    let mut report = PreprocessReport::default();
+
     // 1. Merge System Messages
     if config.merge_system_messages == Some(true) {
         if let Some(SystemPrompt::Array(blocks)) = &mut req.system {
@@ -349,7 +373,10 @@ fn preprocess_messages(req: &mut AnthropicMessageRequest, config: &PreprocessCon
                         if let AnthropicContentBlock::ToolUse { id, name, .. } = block {
                             if name.is_empty() {
                                 removed_tool_ids.insert(id.clone());
+                                report.sanitized_tool_ids.push(id.clone());
                                 return false; // Remove
+                            } else {
+                                report.passed_tool_ids.push(id.clone());
                             }
                         }
                         true // Keep
@@ -382,6 +409,8 @@ fn preprocess_messages(req: &mut AnthropicMessageRequest, config: &PreprocessCon
             });
         }
     }
+    
+    report
 }
 
 // Helper: Normalize to string for Tool Result content (which is typically just text/json)
