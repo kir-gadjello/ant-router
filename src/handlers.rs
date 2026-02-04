@@ -180,13 +180,19 @@ pub async fn handle_messages(
                     let error_bytes = res.bytes().await.unwrap_or_default();
                     let error_text = String::from_utf8_lossy(&error_bytes);
                     
-                    // Regex to parse OpenRouter context length error:
-                    // "This endpoint's maximum context length is 256000 tokens. However, you requested about 256003 tokens (3 of text input, 256000 in the output)."
-                    let re = Regex::new(r"maximum context length is (\d+) tokens.*\((\d+) of text input").unwrap();
+                    // Robust regex to parse OpenRouter context length error across newlines and multiple input types
+                    let re = Regex::new(r"(?s)maximum context length is (\d+).*?requested about (\d+).*?(\d+) in the output").unwrap();
                     if let Some(caps) = re.captures(&error_text) {
-                        if let (Some(max_ctx), Some(input_tokens)) = (caps.get(1), caps.get(2)) {
-                            if let (Ok(max_ctx_val), Ok(input_val)) = (max_ctx.as_str().parse::<u32>(), input_tokens.as_str().parse::<u32>()) {
-                                info!("Caught context length error. Max: {}, Input: {}. Adjusting max_tokens and retrying.", max_ctx_val, input_val);
+                        if let (Some(max_ctx), Some(total_req), Some(output_req)) = (caps.get(1), caps.get(2), caps.get(3)) {
+                            if let (Ok(max_ctx_val), Ok(total_val), Ok(output_val)) = (
+                                max_ctx.as_str().parse::<u32>(), 
+                                total_req.as_str().parse::<u32>(),
+                                output_req.as_str().parse::<u32>()
+                            ) {
+                                let input_val = total_val.saturating_sub(output_val);
+                                info!("Caught context length error. Max: {}, Total Requested: {}, Output Requested: {} (Input: {}). Adjusting max_tokens and retrying.", 
+                                    max_ctx_val, total_val, output_val, input_val);
+                                
                                 let safety_margin = 100;
                                 let available = max_ctx_val.saturating_sub(input_val).saturating_sub(safety_margin);
                                 if available > 0 {

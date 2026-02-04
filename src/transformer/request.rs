@@ -50,7 +50,10 @@ pub fn convert_request(
              if let Some(policy) = &pp.max_output_tokens {
                  match policy {
                      Value::String(s) if s == "auto" => {
-                         req.max_tokens = None;
+                         // Only unset if NOT explicitly overridden by override_max_tokens
+                         if mc.override_max_tokens.is_none() {
+                             req.max_tokens = None;
+                         }
                      },
                      Value::Number(n) => {
                          if let Some(u) = n.as_u64() {
