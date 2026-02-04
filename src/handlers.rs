@@ -1,7 +1,7 @@
 use crate::config::{Config, glob_to_regex};
 use crate::logging::{log_request, record_interaction};
 use crate::protocol::*;
-use crate::transformer::{convert_request, convert_response, convert_stream};
+use crate::transformer::{convert_request, convert_response, convert_stream, record_stream};
 use axum::{
     extract::{Json, State},
     http::{HeaderMap, StatusCode},
@@ -234,20 +234,23 @@ pub async fn handle_messages(
 
     // 7. Handle Response
     if payload.stream == Some(true) {
-        if state.record {
-            let req_clone = payload.clone();
-            tokio::task::spawn_blocking(move || {
-                let placeholder = json!({"stream": true, "note": "Full streaming response capture not implemented in recording"});
-                if let Err(e) = record_interaction(&req_clone, &placeholder) {
-                    warn!("Failed to record streaming interaction: {}", e);
-                }
-            });
-        }
         let stream = response.bytes_stream();
         let openai_stream = parse_sse_stream(stream);
         let anthropic_stream = convert_stream(openai_stream);
 
-        let sse_stream = Box::pin(anthropic_stream.map(|res: Result<AnthropicStreamEvent, anyhow::Error>| {
+        let final_stream = if state.record {
+            let req_clone = payload.clone();
+            Box::pin(record_stream(Box::pin(anthropic_stream), move |full_resp| {
+                let resp_value = serde_json::to_value(&full_resp).unwrap_or(json!({"error": "Failed to serialize response"}));
+                if let Err(e) = record_interaction(&req_clone, &resp_value) {
+                    warn!("Failed to record streaming interaction: {}", e);
+                }
+            })) as std::pin::Pin<Box<dyn futures::Stream<Item = Result<AnthropicStreamEvent, anyhow::Error>> + Send>>
+        } else {
+            Box::pin(anthropic_stream) as std::pin::Pin<Box<dyn futures::Stream<Item = Result<AnthropicStreamEvent, anyhow::Error>> + Send>>
+        };
+
+        let sse_stream = Box::pin(final_stream.map(|res: Result<AnthropicStreamEvent, anyhow::Error>| {
             match res {
                 Ok(event) => {
                     let event_type = get_event_type(&event);

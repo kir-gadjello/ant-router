@@ -131,6 +131,95 @@ fn estimate_tokens(text: &str) -> u32 {
     text.split_whitespace().count() as u32
 }
 
+pub fn record_stream<S, F>(
+    input_stream: S,
+    callback: F,
+) -> impl Stream<Item = Result<AnthropicStreamEvent, anyhow::Error>>
+where
+    S: Stream<Item = Result<AnthropicStreamEvent, anyhow::Error>> + Unpin,
+    F: FnOnce(AnthropicMessageResponse) + Send + 'static,
+{
+    let mut input_stream = input_stream;
+    let mut accumulated_response: Option<AnthropicMessageResponse> = None;
+    let mut callback_opt = Some(callback);
+    let mut partial_tool_inputs: HashMap<u32, String> = HashMap::new();
+
+    stream! {
+        while let Some(event_res) = input_stream.next().await {
+            if let Ok(event) = &event_res {
+                match event {
+                    AnthropicStreamEvent::MessageStart { message } => {
+                        accumulated_response = Some(message.clone());
+                    }
+                    AnthropicStreamEvent::ContentBlockStart { index, content_block } => {
+                        if let Some(resp) = &mut accumulated_response {
+                            // Ensure content vector is large enough
+                            while resp.content.len() <= *index as usize {
+                                // Add a dummy block that will be overwritten
+                                resp.content.push(AnthropicContentBlock::Text { text: "".to_string() });
+                            }
+                            resp.content[*index as usize] = content_block.clone();
+                        }
+                    }
+                    AnthropicStreamEvent::ContentBlockDelta { index, delta } => {
+                        if let Some(resp) = &mut accumulated_response {
+                            if let Some(block) = resp.content.get_mut(*index as usize) {
+                                match (block, delta) {
+                                    (AnthropicContentBlock::Text { text }, AnthropicDelta::TextDelta { text: delta_text }) => {
+                                        text.push_str(delta_text);
+                                    }
+                                    (AnthropicContentBlock::Thinking { thinking, .. }, AnthropicDelta::ThinkingDelta { thinking: delta_thinking }) => {
+                                        thinking.push_str(delta_thinking);
+                                    }
+                                    (AnthropicContentBlock::ToolUse { .. }, AnthropicDelta::InputJsonDelta { partial_json }) => {
+                                        let json_buf = partial_tool_inputs.entry(*index).or_default();
+                                        json_buf.push_str(partial_json);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                    AnthropicStreamEvent::MessageDelta { delta, usage } => {
+                        if let Some(resp) = &mut accumulated_response {
+                            if let Some(sr) = &delta.stop_reason {
+                                resp.stop_reason = Some(sr.clone());
+                            }
+                            if let Some(ss) = &delta.stop_sequence {
+                                resp.stop_sequence = Some(ss.clone());
+                            }
+                            if usage.input_tokens > 0 {
+                                resp.usage.input_tokens = usage.input_tokens;
+                            }
+                            if usage.output_tokens > 0 {
+                                resp.usage.output_tokens = usage.output_tokens;
+                            }
+                        }
+                    }
+                    AnthropicStreamEvent::MessageStop => {
+                        if let Some(mut resp) = accumulated_response.take() {
+                            // Finalize tool inputs
+                            for (index, json_str) in partial_tool_inputs.drain() {
+                                if let Some(AnthropicContentBlock::ToolUse { input, .. }) = resp.content.get_mut(index as usize) {
+                                    if let Ok(val) = serde_json::from_str(json_str.as_str()) {
+                                        *input = val;
+                                    }
+                                }
+                            }
+
+                            if let Some(cb) = callback_opt.take() {
+                                cb(resp);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            yield event_res;
+        }
+    }
+}
+
 // Streaming State
 #[derive(Debug, PartialEq, Clone, Copy)]
 enum BlockType {
