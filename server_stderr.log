@@ -1,0 +1,2 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running `target/debug/anthropic-bridge --port 3001 --config /app/test_config.yaml`

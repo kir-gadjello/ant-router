@@ -33,6 +33,7 @@ async fn test_preprocess_merge_sysmsgs() {
             match_features: vec![],
             reasoning_target: None,
         }],
+        tool_filters: None,
     });
     config.current_profile = "test".to_string();
     config.upstream.base_url = Some(mock_server.uri());
@@ -105,6 +106,7 @@ async fn test_preprocess_sanitize_tool_history() {
             match_features: vec![],
             reasoning_target: None,
         }],
+        tool_filters: None,
     });
     config.current_profile = "test".to_string();
     config.upstream.base_url = Some(mock_server.uri());
@@ -220,6 +222,7 @@ async fn test_max_output_cap() {
             match_features: vec![],
             reasoning_target: None,
         }],
+        tool_filters: None,
     });
     config.current_profile = "test".to_string();
     config.upstream.base_url = Some(mock_server.uri());
@@ -279,6 +282,7 @@ async fn test_max_tokens_override() {
             match_features: vec![],
             reasoning_target: None,
         }],
+        tool_filters: None,
     });
     config.current_profile = "test".to_string();
     config.upstream.base_url = Some(mock_server.uri());
@@ -341,6 +345,7 @@ async fn test_max_output_tokens_auto() {
             match_features: vec![],
             reasoning_target: None,
         }],
+        tool_filters: None,
     });
     config.current_profile = "test".to_string();
     config.upstream.base_url = Some(mock_server.uri());
@@ -404,6 +409,7 @@ async fn test_override_max_tokens_auto() {
             match_features: vec![],
             reasoning_target: None,
         }],
+        tool_filters: None,
     });
     config.current_profile = "test".to_string();
     config.upstream.base_url = Some(mock_server.uri());
@@ -463,6 +469,7 @@ async fn test_override_max_tokens_human_readable() {
             match_features: vec![],
             reasoning_target: None,
         }],
+        tool_filters: None,
     });
     config.current_profile = "test".to_string();
     config.upstream.base_url = Some(mock_server.uri());
