@@ -1,5 +1,8 @@
 use crate::config::{Config, glob_to_regex};
 use crate::logging::{log_request, record_interaction};
+use crate::middleware::system_prompt::SystemPromptPatcherMiddleware;
+use crate::middleware::tool_enforcer::ToolEnforcerMiddleware;
+use crate::middleware::tool_filter::ToolFilterMiddleware;
 use crate::middleware::Middleware;
 use crate::protocol::*;
 use crate::transformer::{convert_request, convert_response, convert_stream, record_stream};
@@ -30,7 +33,6 @@ pub struct AppState {
     pub tool_verbose: bool,
     pub record: bool,
     pub tools_reported: AtomicBool,
-    pub middlewares: Vec<Box<dyn Middleware>>,
 }
 
 pub async fn health_check() -> impl IntoResponse {
@@ -44,8 +46,42 @@ pub async fn handle_messages(
 ) -> impl IntoResponse {
     let _start = std::time::Instant::now();
 
+    // 2. Resolve Model Configuration
+    let profile_name = &state.config.current_profile;
+    let profile = match state.config.profiles.get(profile_name) {
+        Some(p) => p,
+        None => {
+            error!("Current profile '{}' not found in config", profile_name);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("Profile '{}' not found", profile_name)})),
+            )
+                .into_response();
+        }
+    };
+
+    // Construct Middlewares Per Request (to support profile-specific configs)
+    let mut middlewares: Vec<Box<dyn Middleware>> = Vec::new();
+
+    // 1. Tool Filtering (Profile specific > Global fallback)
+    let tool_filter_config = profile
+        .tool_filters
+        .clone()
+        .or_else(|| state.config.tool_filters.clone());
+    middlewares.push(Box::new(ToolFilterMiddleware::new(tool_filter_config)));
+
+    // 2. System Prompt Patcher (Global for now, but could be profile specific)
+    middlewares.push(Box::new(SystemPromptPatcherMiddleware::new(
+        state.config.system_prompts.clone(),
+    )));
+
+    // 3. Tool Enforcer (ExitTool) - Toggled by config
+    if state.config.enable_exit_tool {
+        middlewares.push(Box::new(ToolEnforcerMiddleware::new()));
+    }
+
     // Middleware: on_request
-    for m in &state.middlewares {
+    for m in &middlewares {
         if let Err(e) = m.on_request(&mut payload) {
             error!("Middleware request error: {}", e);
             return (
@@ -84,19 +120,6 @@ pub async fn handle_messages(
     if thinking_enabled {
         request_features.push("reasoning");
     }
-
-    // 2. Resolve Model Configuration
-    let profile_name = &state.config.current_profile;
-    let profile = match state.config.profiles.get(profile_name) {
-        Some(p) => p,
-        None => {
-            error!("Current profile '{}' not found in config", profile_name);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": format!("Profile '{}' not found", profile_name)})),
-            ).into_response();
-        }
-    };
 
     let target_logical_id = resolve_via_rules(profile, &payload.model, &request_features);
 
@@ -257,7 +280,7 @@ pub async fn handle_messages(
         > = Box::pin(anthropic_stream);
 
         // Middleware: transform_stream
-        for m in &state.middlewares {
+        for m in &middlewares {
             final_stream = m.transform_stream(final_stream);
         }
 
@@ -308,7 +331,7 @@ pub async fn handle_messages(
         match convert_response(openai_resp) {
             Ok(mut anthropic_resp) => {
                 // Middleware: on_response
-                for m in &state.middlewares {
+                for m in &middlewares {
                     if let Err(e) = m.on_response(&mut anthropic_resp) {
                         error!("Middleware response error: {}", e);
                         return (

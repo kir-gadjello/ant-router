@@ -1,20 +1,2 @@
-warning: value captured by `state.tool_name_buffer` is never read
-   --> src/middleware/tool_enforcer.rs:124:41
-    |
-124 | ...                   state.tool_name_buffer = name.clone();
-    |                       ^^^^^^^^^^^^^^^^^^^^^^
-    |
-    = help: did you mean to capture by reference instead?
-    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
-
-warning: value assigned to `state.tool_name_buffer` is never read
-   --> src/middleware/tool_enforcer.rs:124:41
-    |
-124 | ...                   state.tool_name_buffer = name.clone();
-    |                       ^^^^^^^^^^^^^^^^^^^^^^
-    |
-    = help: maybe it is overwritten before being read?
-
-warning: `anthropic-bridge` (lib) generated 2 warnings
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.19s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.25s
      Running `target/debug/anthropic-bridge --port 3001 --config /app/test_config.yaml`

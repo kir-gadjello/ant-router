@@ -1,6 +1,3 @@
-use anthropic_bridge::middleware::{
-    system_prompt::SystemPromptPatcherMiddleware, tool_enforcer::ToolEnforcerMiddleware, Middleware,
-};
 use anthropic_bridge::{config::Config, create_router, handlers::AppState};
 use anyhow::{Context, Result};
 use std::env;
@@ -210,16 +207,6 @@ async fn main() -> Result<()> {
         .read_timeout(Duration::from_secs(300))
         .build()?;
 
-    // Middleware Initialization
-    let mut middlewares: Vec<Box<dyn Middleware>> = Vec::new();
-
-    // 1. System Prompt Patcher
-    // Configured with None/None for now, but fully functional if configured
-    middlewares.push(Box::new(SystemPromptPatcherMiddleware::new(None, None)));
-
-    // 2. Tool Enforcer (ExitTool)
-    middlewares.push(Box::new(ToolEnforcerMiddleware::new()));
-
     let state = Arc::new(AppState {
         config,
         client,
@@ -229,7 +216,6 @@ async fn main() -> Result<()> {
         tool_verbose,
         record,
         tools_reported: AtomicBool::new(false),
-        middlewares,
     });
 
     // 5. Router

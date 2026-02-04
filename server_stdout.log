@@ -1,12 +1,13 @@
-[2m2026-02-04T03:00:07.993440Z[0m [32m INFO[0m Loading config from /app/test_config.yaml
-[2m2026-02-04T03:00:07.994449Z[0m [32m INFO[0m Config port: None
-[2m2026-02-04T03:00:07.994551Z[0m [32m INFO[0m CLI port: Some(3001)
-[2m2026-02-04T03:00:07.994565Z[0m [32m INFO[0m Final Resolved port: 3001
-[2m2026-02-04T03:00:08.079589Z[0m [32m INFO[0m Listening on 0.0.0.0:3001
-[2m2026-02-04T03:00:17.808700Z[0m [32m INFO[0m Request for 'claude-3-opus-20240229' (features=[]) -> Logical 'mock-model' -> Wire 'mock-model'
-[2m2026-02-04T03:00:17.845803Z[0m [32m INFO[0m Request for 'claude-3-opus-20240229' (features=[]) -> Logical 'mock-model' -> Wire 'mock-model'
-[2m2026-02-04T03:00:17.908328Z[0m [32m INFO[0m Request for 'claude-3-opus-20240229' (features=[]) -> Logical 'mock-model' -> Wire 'mock-model'
-[2m2026-02-04T03:00:17.974637Z[0m [32m INFO[0m Request for 'claude-3-opus-20240229' (features=[]) -> Logical 'mock-model' -> Wire 'mock-model'
-[2m2026-02-04T03:00:18.056823Z[0m [32m INFO[0m Request for 'claude-3-opus-20240229' (features=[]) -> Logical 'mock-model' -> Wire 'mock-model'
-[2m2026-02-04T03:00:18.067078Z[0m [32m INFO[0m Request for 'claude-3-opus-20240229' (features=[]) -> Logical 'mock-model' -> Wire 'mock-model'
-[2m2026-02-04T03:00:18.103671Z[0m [32m INFO[0m Request for 'test' (features=[]) -> Logical 'mock-model' -> Wire 'mock-model'
+[2m2026-02-04T03:52:05.936428Z[0m [32m INFO[0m Loading config from /app/test_config.yaml
+[2m2026-02-04T03:52:05.937315Z[0m [32m INFO[0m Config port: None
+[2m2026-02-04T03:52:05.937336Z[0m [32m INFO[0m CLI port: Some(3001)
+[2m2026-02-04T03:52:05.937345Z[0m [32m INFO[0m Final Resolved port: 3001
+[2m2026-02-04T03:52:06.041842Z[0m [32m INFO[0m Listening on 0.0.0.0:3001
+[2m2026-02-04T03:52:15.651077Z[0m [32m INFO[0m Request for 'claude-3-opus-20240229' (features=[]) -> Logical 'mock-model' -> Wire 'mock-model'
+[2m2026-02-04T03:52:15.683234Z[0m [32m INFO[0m Request for 'claude-3-opus-20240229' (features=[]) -> Logical 'mock-model' -> Wire 'mock-model'
+[2m2026-02-04T03:52:15.734270Z[0m [32m INFO[0m Request for 'claude-3-opus-20240229' (features=[]) -> Logical 'mock-model' -> Wire 'mock-model'
+[2m2026-02-04T03:52:15.788265Z[0m [32m INFO[0m Request for 'claude-3-opus-20240229' (features=[]) -> Logical 'mock-model' -> Wire 'mock-model'
+[2m2026-02-04T03:52:15.866478Z[0m [32m INFO[0m Request for 'claude-3-opus-20240229' (features=[]) -> Logical 'mock-model' -> Wire 'mock-model'
+[2m2026-02-04T03:52:15.876774Z[0m [32m INFO[0m Request for 'claude-3-opus-20240229' (features=[]) -> Logical 'mock-model' -> Wire 'mock-model'
+[2m2026-02-04T03:52:15.926544Z[0m [32m INFO[0m Request for 'claude-3-opus-20240229' (features=["vision"]) -> Logical 'mock-model' -> Wire 'mock-model'
+[2m2026-02-04T03:52:15.960657Z[0m [32m INFO[0m Request for 'test' (features=[]) -> Logical 'mock-model' -> Wire 'mock-model'

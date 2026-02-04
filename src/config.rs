@@ -36,9 +36,20 @@ pub struct Config {
     pub server: ServerConfig,
     #[serde(default)]
     pub upstream: UpstreamConfig,
+
+    #[serde(default)]
+    pub tool_filters: Option<ToolFilterConfig>,
+    #[serde(default)]
+    pub system_prompts: Vec<SystemPromptRule>,
+    #[serde(default = "default_true")]
+    pub enable_exit_tool: bool,
 }
 
 fn default_log_enabled() -> bool {
+    true
+}
+
+fn default_true() -> bool {
     true
 }
 
@@ -57,6 +68,8 @@ pub struct UpstreamConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct Profile {
     pub rules: Vec<Rule>,
+    #[serde(default)]
+    pub tool_filters: Option<ToolFilterConfig>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -66,6 +79,29 @@ pub struct Rule {
     pub match_features: Vec<String>,
     pub target: String,
     pub reasoning_target: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct ToolFilterConfig {
+    pub allow: Option<Vec<String>>,
+    pub deny: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct SystemPromptRule {
+    pub name: String,
+    pub r#match: Vec<String>,
+    pub action: SystemPromptAction,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(tag = "type", content = "value")]
+pub enum SystemPromptAction {
+    Replace(String),
+    Prepend(String),
+    Append(String),
+    #[serde(rename = "move_to_user")]
+    MoveToUser(Option<String>),
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -455,6 +491,9 @@ impl Default for Config {
             no_ant: false,
             server: ServerConfig::default(),
             upstream: UpstreamConfig::default(),
+            tool_filters: None,
+            system_prompts: Vec::new(),
+            enable_exit_tool: true,
         }
     }
 }

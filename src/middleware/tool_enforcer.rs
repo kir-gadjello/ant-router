@@ -54,51 +54,43 @@ impl Middleware for ToolEnforcerMiddleware {
 
     fn on_response(&self, resp: &mut AnthropicMessageResponse) -> Result<()> {
         // Check if the response contains a tool use for ExitTool
-        let mut exit_tool_response = None;
         let mut new_blocks = Vec::new();
 
         for block in &resp.content {
             if let AnthropicContentBlock::ToolUse { name, input, .. } = block {
                 if name == "ExitTool" {
                     // Found ExitTool!
-                    if let Some(response_text) = input.get("response").and_then(|v| v.as_str()) {
-                        exit_tool_response = Some(response_text.to_string());
+                    let exit_response_text = if let Some(response_text) = input.get("response").and_then(|v| v.as_str()) {
+                        response_text.to_string()
                     } else {
-                        // Fallback if response arg is missing or not string
-                        exit_tool_response = Some("".to_string());
-                    }
-                    // We consume this block (don't add to new_blocks yet)
-                    // Actually, if we find ExitTool, we should probably replace the ENTIRE response content
-                    // with just the text, or append the text?
-                    // The instruction says "Transform Tool Call into standard Text Message".
+                        "".to_string()
+                    };
+
+                    // Replace the ToolUse block with the Text block
+                    new_blocks.push(AnthropicContentBlock::Text {
+                        text: exit_response_text
+                    });
+
+                    // We found ExitTool, so we change stop_reason
+                    resp.stop_reason = Some("end_turn".to_string());
                     continue;
                 }
             }
             new_blocks.push(block.clone());
         }
 
-        if let Some(text) = exit_tool_response {
-            // Replace content with just the text
-            resp.content = vec![AnthropicContentBlock::Text { text }];
-            resp.stop_reason = Some("end_turn".to_string());
-        }
+        resp.content = new_blocks;
 
         Ok(())
     }
 
     fn transform_stream(&self, stream: StreamBox) -> StreamBox {
-        // For streaming, we need to detect ExitTool usage incrementally.
-        // This is complex because the tool name comes first, then arguments.
-        // If we detect "ExitTool", we need to suppress the ToolUse blocks and instead
-        // emit Text blocks with the content of the "response" argument.
-
         let mut stream = stream;
 
         // We need state to track if we are inside ExitTool
         struct State {
             capturing_exit_tool: bool,
             has_captured_exit_tool: bool,
-            tool_name_buffer: String,
             tool_input_buffer: String,
             current_tool_index: Option<u32>,
         }
@@ -106,7 +98,6 @@ impl Middleware for ToolEnforcerMiddleware {
         let mut state = State {
             capturing_exit_tool: false,
             has_captured_exit_tool: false,
-            tool_name_buffer: String::new(),
             tool_input_buffer: String::new(),
             current_tool_index: None,
         };
@@ -121,15 +112,8 @@ impl Middleware for ToolEnforcerMiddleware {
                                     if name == "ExitTool" {
                                         state.capturing_exit_tool = true;
                                         state.current_tool_index = Some(index);
-                                        state.tool_name_buffer = name.clone();
                                         // Don't emit this event
                                         continue;
-                                    } else if name.is_empty() {
-                                        // Name might come later? No, Start block usually has name if known,
-                                        // or name is empty and filled by delta?
-                                        // Protocol says Start has `name`.
-                                        // But sometimes it might be partial?
-                                        // Let's assume if it's not ExitTool, we pass it through.
                                     }
                                 }
 
@@ -146,19 +130,15 @@ impl Middleware for ToolEnforcerMiddleware {
                                         if state.tool_input_buffer.len() + partial_json.len() > 1024 * 100 {
                                             // Safety limit: 100KB. If exceeded, stop capturing to avoid DoS.
                                             // We effectively corrupt the capture but protect memory.
-                                            state.capturing_exit_tool = false;
+                                            // Ideally we should maybe error out?
+                                            // For now, we just stop buffering but we remain in "capturing" state
+                                            // to suppress the rest of the stream for this tool.
+                                            // However, without buffering, we can't emit the final text.
+                                            // So we will emit an error text or partial?
+                                            // Let's just truncate.
                                         } else {
                                             state.tool_input_buffer.push_str(&partial_json);
                                         }
-                                        // We can't really stream the "response" field value as text delta reliably
-                                        // without a streaming JSON parser.
-                                        // Strategy: Buffer everything until MessageStop or ToolUse close?
-                                        // Then emit Text block?
-                                        // But that defeats streaming latency.
-                                        // However, converting Tool Call -> Text usually implies we want the text.
-                                        // If the user wants streaming text, they should ask the model to speak.
-                                        // ExitTool is for when the model THINKS it's done and wants to return a final answer.
-                                        // So buffering is acceptable.
                                     }
                                     continue;
                                 }
@@ -168,25 +148,29 @@ impl Middleware for ToolEnforcerMiddleware {
                                 if state.capturing_exit_tool && state.current_tool_index == Some(index) {
                                     // End of ExitTool block.
                                     // Parse the input buffer
-                                    if let Ok(json_val) = serde_json::from_str::<Value>(&state.tool_input_buffer) {
-                                        if let Some(response_text) = json_val.get("response").and_then(|v| v.as_str()) {
-                                            // Emit a Text block start, delta, and stop
-                                            // reusing the same index? Or a new one?
-                                            // Reusing the index might be confusing if the client saw a ToolUse start?
-                                            // Ah, we SUPPRESSED the ToolUse start.
-                                            // So we can emit a Text start now.
-
-                                            yield Ok(AnthropicStreamEvent::ContentBlockStart {
-                                                index,
-                                                content_block: AnthropicContentBlock::Text { text: "".to_string() }
-                                            });
-                                            yield Ok(AnthropicStreamEvent::ContentBlockDelta {
-                                                index,
-                                                delta: AnthropicDelta::TextDelta { text: response_text.to_string() }
-                                            });
-                                            yield Ok(AnthropicStreamEvent::ContentBlockStop { index });
+                                    let response_text = match serde_json::from_str::<Value>(&state.tool_input_buffer) {
+                                        Ok(json_val) => {
+                                            json_val.get("response")
+                                                .and_then(|v| v.as_str())
+                                                .map(|s| s.to_string())
+                                                .unwrap_or_else(|| state.tool_input_buffer.clone())
+                                        },
+                                        Err(_) => {
+                                            // Fallback if JSON is invalid
+                                            state.tool_input_buffer.clone()
                                         }
-                                    }
+                                    };
+
+                                    // Emit a Text block start, delta, and stop
+                                    yield Ok(AnthropicStreamEvent::ContentBlockStart {
+                                        index,
+                                        content_block: AnthropicContentBlock::Text { text: "".to_string() }
+                                    });
+                                    yield Ok(AnthropicStreamEvent::ContentBlockDelta {
+                                        index,
+                                        delta: AnthropicDelta::TextDelta { text: response_text }
+                                    });
+                                    yield Ok(AnthropicStreamEvent::ContentBlockStop { index });
 
                                     state.capturing_exit_tool = false;
                                     state.has_captured_exit_tool = true;
@@ -198,7 +182,6 @@ impl Middleware for ToolEnforcerMiddleware {
                             }
                             AnthropicStreamEvent::MessageDelta { mut delta, usage } => {
                                 if state.has_captured_exit_tool {
-                                    // If we are capturing, we might want to change stop_reason if it was tool_use
                                     if let Some(sr) = &delta.stop_reason {
                                         if sr == "tool_use" {
                                             delta.stop_reason = Some("end_turn".to_string());

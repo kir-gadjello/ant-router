@@ -69,6 +69,7 @@ fn test_config() -> Config {
                         reasoning_target: None,
                     },
                 ],
+                tool_filters: None,
             },
         )]),
         models: HashMap::from([
@@ -274,6 +275,7 @@ async fn test_bug_default_catchall() {
                         reasoning_target: None,
                     }
                 ],
+                tool_filters: None,
             })
         ]),
         models: HashMap::from([
