@@ -13,7 +13,7 @@ use tracing::warn;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
-    #[serde(default)]
+    #[serde(default = "default_profile")]
     pub current_profile: String,
 
     #[serde(default)]
@@ -51,6 +51,10 @@ fn default_log_enabled() -> bool {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_profile() -> String {
+    "default".to_string()
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
