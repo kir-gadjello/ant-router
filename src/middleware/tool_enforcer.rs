@@ -1,7 +1,7 @@
 use super::{Middleware, StreamBox};
 use crate::protocol::{
     AnthropicContentBlock, AnthropicDelta, AnthropicMessageRequest, AnthropicMessageResponse,
-    AnthropicStreamEvent, AnthropicTool, AnthropicToolChoice,
+    AnthropicStreamEvent, AnthropicTool, AnthropicToolDef, AnthropicToolChoice,
 };
 use anyhow::Result;
 use async_stream::stream;
@@ -16,7 +16,7 @@ impl ToolEnforcerMiddleware {
     }
 
     fn get_exit_tool_def(&self) -> AnthropicTool {
-        AnthropicTool {
+        AnthropicTool::Anthropic(AnthropicToolDef {
             name: "ExitTool".to_string(),
             description: Some("Use this tool when you are in tool mode and have completed the task. The response argument will be returned to the user.".to_string()),
             input_schema: json!({
@@ -32,7 +32,7 @@ impl ToolEnforcerMiddleware {
             }),
             input_examples: None,
             strict: Some(true),
-        }
+        })
     }
 }
 
@@ -41,7 +41,12 @@ impl Middleware for ToolEnforcerMiddleware {
         // Only inject if tools are already present
         if let Some(tools) = &mut req.tools {
             // Check if ExitTool already exists to avoid duplication
-            if !tools.iter().any(|t| t.name == "ExitTool") {
+            let exists = tools.iter().any(|t| match t {
+                AnthropicTool::Anthropic(t) => t.name == "ExitTool",
+                AnthropicTool::OpenAI(t) => t.function.name == "ExitTool",
+            });
+
+            if !exists {
                 tools.push(self.get_exit_tool_def());
             }
 

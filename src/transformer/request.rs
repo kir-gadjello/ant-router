@@ -254,23 +254,32 @@ pub fn convert_request(
     let mut openai_tools = None;
     if let Some(tools) = req.tools {
         let mut converted_tools = Vec::new();
-        for tool in tools {
-            if tool.name == "BatchTool" {
-                continue;
+        for tool_enum in tools {
+            match tool_enum {
+                AnthropicTool::Anthropic(tool) => {
+                    if tool.name == "BatchTool" {
+                        continue;
+                    }
+
+                    let mut schema = tool.input_schema;
+                    remove_uri_format(&mut schema);
+
+                    converted_tools.push(OpenAITool {
+                        r#type: "function".to_string(),
+                        function: OpenAIFunction {
+                            name: tool.name,
+                            description: tool.description,
+                            parameters: schema,
+                            strict: tool.strict,
+                        },
+                    });
+                }
+                AnthropicTool::OpenAI(mut tool) => {
+                    // Pass through OpenAI tools, but still clean up schema if needed
+                    remove_uri_format(&mut tool.function.parameters);
+                    converted_tools.push(tool);
+                }
             }
-
-            let mut schema = tool.input_schema;
-            remove_uri_format(&mut schema);
-
-            converted_tools.push(OpenAITool {
-                r#type: "function".to_string(),
-                function: OpenAIFunction {
-                    name: tool.name,
-                    description: tool.description,
-                    parameters: schema,
-                    strict: tool.strict,
-                },
-            });
         }
         if !converted_tools.is_empty() {
             openai_tools = Some(converted_tools);
