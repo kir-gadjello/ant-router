@@ -510,6 +510,10 @@ async fn execute_upstream_request(
     let mut attempts = 0;
     let mut context_length_retries = 0;
     let max_context_retries = 1;
+    let re = Regex::new(
+        r"(?s)maximum context length is (\d+).*?requested about (\d+).*?(\d+) in the output",
+    )
+    .unwrap();
 
     loop {
         attempts += 1;
