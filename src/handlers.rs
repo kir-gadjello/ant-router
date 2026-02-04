@@ -1,5 +1,6 @@
 use crate::config::{
-    glob_to_regex, ApiParams, Config, SystemPromptOp, SystemPromptRule, ToolFilterConfig,
+    glob_to_regex, merge_preprocess, ApiParams, Config, SystemPromptOp, SystemPromptRule,
+    ToolFilterConfig,
 };
 use crate::logging::{log_request, record_interaction};
 use crate::middleware::system_prompt::SystemPromptPatcherMiddleware;
@@ -46,15 +47,6 @@ pub async fn handle_messages(
     _headers: HeaderMap,
     Json(mut payload): Json<AnthropicMessageRequest>,
 ) -> impl IntoResponse {
-    // 1. Resolve Profile (Original Logic, overrides not supported on this endpoint per spec, or implicit?)
-    // Task T4 says "if incoming request model starts with OVERRIDE-...".
-    // Usually applies to any request, but let's support it here too if needed.
-    // But existing logic relies on `state.config.current_profile`.
-    // Let's integrate `resolve_model_with_overrides` logic here too if possible,
-    // but `resolve_model_with_overrides` expects OpenAI request logic?
-    // No, T4 says "incoming request model". Could be Anthropic too.
-    // I'll implement override logic here too.
-
     // Check for override
     let (target_profile_name, target_logical_id_override) = check_overrides(&payload.model);
 
@@ -90,7 +82,11 @@ pub async fn handle_messages(
         .unwrap_or_else(|| state.config.system_prompts.clone());
     middlewares.push(Box::new(SystemPromptPatcherMiddleware::new(system_prompts)));
 
-    if state.config.enable_exit_tool {
+    let enable_exit_tool = profile
+        .enable_exit_tool
+        .unwrap_or(state.config.enable_exit_tool);
+
+    if enable_exit_tool {
         middlewares.push(Box::new(ToolEnforcerMiddleware::new()));
     }
 
@@ -141,11 +137,19 @@ pub async fn handle_messages(
     };
 
     // Lookup ModelConfig
-    let model_conf = state.config.models.get(&target_logical_id);
-    let (wire_model, api_params) = if let Some(conf) = model_conf {
+    let base_model_conf = state.config.models.get(&target_logical_id);
+
+    // Merge Profile Preprocess with Model Preprocess (Profile overrides Model)
+    let mut model_conf = base_model_conf.cloned().unwrap_or_default();
+
+    if let Some(profile_preprocess) = &profile.preprocess {
+        model_conf.preprocess = merge_preprocess(model_conf.preprocess, Some(profile_preprocess.clone()));
+    }
+
+    let (wire_model, api_params) = if base_model_conf.is_some() {
         (
-            state.config.get_wire_model_id(conf),
-            conf.api_params.clone(),
+            state.config.get_wire_model_id(&model_conf),
+            model_conf.api_params.clone(),
         )
     } else {
         warn!(
@@ -170,7 +174,7 @@ pub async fn handle_messages(
 
     // Convert Request
     let (openai_req, report) =
-        match convert_request(payload.clone(), wire_model.clone(), model_conf) {
+        match convert_request(payload.clone(), wire_model.clone(), Some(&model_conf)) {
             Ok(res) => res,
             Err(e) => {
                 error!("Failed to convert request: {}", e);
@@ -215,42 +219,30 @@ pub async fn handle_messages(
             Box<dyn futures::Stream<Item = Result<AnthropicStreamEvent, anyhow::Error>> + Send>,
         > = Box::pin(anthropic_stream);
 
-        for m in &middlewares {
-            final_stream = m.transform_stream(final_stream);
+        // Record interaction if enabled
+        if state.record {
+             let req_clone = payload.clone();
+             final_stream = Box::pin(record_stream(final_stream, move |accumulated_resp| {
+                 let resp_value = serde_json::to_value(&accumulated_resp).unwrap_or(json!({"error": "Failed to serialize response"}));
+                 tokio::task::spawn_blocking(move || {
+                     if let Err(e) = record_interaction(&req_clone, &resp_value) {
+                         warn!("Failed to record interaction: {}", e);
+                     }
+                 });
+             }));
         }
 
-        let recorded_stream = if state.record {
-            let req_clone = payload.clone();
-            Box::pin(record_stream(final_stream, move |full_resp| {
-                let resp_value = serde_json::to_value(&full_resp)
-                    .unwrap_or(json!({"error": "Failed to serialize response"}));
-                if let Err(e) = record_interaction(&req_clone, &resp_value) {
-                    warn!("Failed to record streaming interaction: {}", e);
+        let sse_stream = Box::pin(final_stream.map(|res| {
+            match res {
+                Ok(event) => {
+                    let event_type = get_event_type(&event);
+                    Event::default().event(event_type).json_data(event)
                 }
-            }))
-                as std::pin::Pin<
-                    Box<
-                        dyn futures::Stream<Item = Result<AnthropicStreamEvent, anyhow::Error>>
-                            + Send,
-                    >,
-                >
-        } else {
-            final_stream
-        };
-
-        let sse_stream = Box::pin(recorded_stream.map(
-            |res: Result<AnthropicStreamEvent, anyhow::Error>| {
-                match res {
-                    Ok(event) => {
-                        let event_type = get_event_type(&event);
-                        Event::default().event(event_type).json_data(event)
-                    }
-                    Err(e) => Event::default()
-                        .event("error")
-                        .json_data(json!({"error": e.to_string()})),
-                }
-            },
-        ));
+                Err(e) => Event::default()
+                    .event("error")
+                    .json_data(json!({"error": e.to_string()})),
+            }
+        }));
 
         Sse::new(sse_stream)
             .keep_alive(KeepAlive::default())
@@ -277,7 +269,7 @@ pub async fn handle_messages(
             );
         }
 
-        match convert_response(openai_resp) {
+        match convert_response(openai_resp, Some(&model_conf)) {
             Ok(mut anthropic_resp) => {
                 for m in &middlewares {
                     if let Err(e) = m.on_response(&mut anthropic_resp) {
@@ -367,8 +359,7 @@ pub async fn handle_openai_chat(
             }
         }
     }
-    // Reasoning? OpenAI reasoning not standardized, maybe checks `reasoning` field
-    // or specific model params. Assuming no explicit feature check for now unless standard emerges.
+
 
     // Model Resolution
     let target_logical_id = if let Some(id) = target_logical_id_override {
@@ -378,11 +369,20 @@ pub async fn handle_openai_chat(
     };
 
     // Lookup ModelConfig
-    let model_conf = state.config.models.get(&target_logical_id);
-    let (wire_model, api_params) = if let Some(conf) = model_conf {
+    let base_model_conf = state.config.models.get(&target_logical_id);
+
+    // Merge Profile Preprocess with Model Preprocess (Profile overrides Model)
+    let mut model_conf = base_model_conf.cloned().unwrap_or_default();
+
+    if let Some(profile_preprocess) = &profile.preprocess {
+        // Merge strategy: Profile overrides Model
+        model_conf.preprocess = merge_preprocess(model_conf.preprocess, Some(profile_preprocess.clone()));
+    }
+
+    let (wire_model, api_params) = if base_model_conf.is_some() {
         (
-            state.config.get_wire_model_id(conf),
-            conf.api_params.clone(),
+            state.config.get_wire_model_id(&model_conf),
+            model_conf.api_params.clone(),
         )
     } else {
         warn!(
@@ -392,7 +392,6 @@ pub async fn handle_openai_chat(
         (target_logical_id.clone(), None)
     };
 
-    // Check `no_ant` (if applicable? Spec didn't say only for Ant endpoint)
     if state.config.no_ant && wire_model.to_lowercase().contains("anthropic") {
         return (
             StatusCode::FORBIDDEN,
@@ -432,6 +431,7 @@ pub async fn handle_openai_chat(
         let openai_stream = parse_sse_stream(stream);
 
         // Pass-through stream
+        // This endpoint acts as a proxy for OpenAI clients, so we return OpenAI chunks directly.
         let sse_stream = Box::pin(openai_stream.map(|res| {
             match res {
                 Ok(chunk) => Event::default().json_data(chunk),
@@ -675,11 +675,9 @@ fn apply_openai_system_prompt_patch(
                     all_matched = false;
                     break;
                 }
-            } else {
-                if !current_system.contains(pattern) {
-                    all_matched = false;
-                    break;
-                }
+            } else if !current_system.contains(pattern) {
+                all_matched = false;
+                break;
             }
         }
 

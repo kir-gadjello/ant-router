@@ -1,7 +1,7 @@
 use super::{Middleware, StreamBox};
 use crate::protocol::{
     AnthropicContentBlock, AnthropicDelta, AnthropicMessageRequest, AnthropicMessageResponse,
-    AnthropicStreamEvent, AnthropicTool, AnthropicToolDef, AnthropicToolChoice,
+    AnthropicStreamEvent, AnthropicTool, AnthropicToolDef, AnthropicToolChoice, SystemPrompt,
 };
 use anyhow::Result;
 use async_stream::stream;
@@ -9,6 +9,12 @@ use futures::StreamExt;
 use serde_json::{json, Value};
 
 pub struct ToolEnforcerMiddleware;
+
+impl Default for ToolEnforcerMiddleware {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl ToolEnforcerMiddleware {
     pub fn new() -> Self {
@@ -53,6 +59,29 @@ impl Middleware for ToolEnforcerMiddleware {
             // Force tool choice if not already specific
             if req.tool_choice.is_none() || matches!(req.tool_choice, Some(AnthropicToolChoice::Auto)) {
                  req.tool_choice = Some(AnthropicToolChoice::Any);
+            }
+
+            // Inject System Prompt
+            let system_prompt = "<system-reminder>Tool mode is active. If no available tool is appropriate, you MUST call the ExitTool.</system-reminder>".to_string();
+
+            match &mut req.system {
+                Some(SystemPrompt::String(s)) => {
+                    if !s.contains("<system-reminder>") {
+                        s.push_str("\n\n");
+                        s.push_str(&system_prompt);
+                    }
+                },
+                Some(SystemPrompt::Array(blocks)) => {
+                    // Just append a text block
+                    blocks.push(crate::protocol::SystemBlock {
+                        r#type: "text".to_string(),
+                        text: system_prompt,
+                        other: std::collections::HashMap::new(),
+                    });
+                },
+                None => {
+                    req.system = Some(SystemPrompt::String(system_prompt));
+                }
             }
         }
 

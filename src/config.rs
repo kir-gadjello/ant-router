@@ -78,6 +78,10 @@ pub struct Profile {
     pub tool_filters: Option<ToolFilterConfig>,
     #[serde(default)]
     pub system_prompts: Option<Vec<SystemPromptRule>>,
+    #[serde(default)]
+    pub preprocess: Option<PreprocessConfig>,
+    #[serde(default)]
+    pub enable_exit_tool: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -215,6 +219,8 @@ pub struct PreprocessConfig {
     pub strict_tools: Option<bool>,
     #[serde(default)]
     pub clean_web_search: Option<bool>,
+    #[serde(default)]
+    pub json_repair: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
@@ -412,7 +418,7 @@ fn merge_overrides(
     }
 }
 
-fn merge_preprocess(
+pub fn merge_preprocess(
     parent: Option<PreprocessConfig>,
     child: Option<PreprocessConfig>,
 ) -> Option<PreprocessConfig> {
@@ -428,6 +434,7 @@ fn merge_preprocess(
             disable_parallel_tool_calls: c.disable_parallel_tool_calls.or(p.disable_parallel_tool_calls),
             strict_tools: c.strict_tools.or(p.strict_tools),
             clean_web_search: c.clean_web_search.or(p.clean_web_search),
+            json_repair: c.json_repair.or(p.json_repair),
         }),
     }
 }

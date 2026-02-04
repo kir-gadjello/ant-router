@@ -55,6 +55,35 @@ tool_filters:
   # allow: ["*"]          # Default: Allow all
   # deny: ["dangerous_*"] # Example: Block tools starting with "dangerous_"
 
+# Preprocess Configuration (Tool Reliability & Fixes)
+# ----------------------------------------------------------------------------------
+# These settings control how requests are modified before being sent upstream.
+# They can be set globally in a model config, or overridden per-profile.
+#
+# preprocess:
+#   # Disables parallel tool calls (sets `parallel_tool_calls: false`).
+#   # Critical for agents that perform state-changing operations (like file edits) to avoid race conditions.
+#   disable_parallel_tool_calls: true
+#
+#   # Enforces OpenAI "Strict Mode" (Structured Outputs) for the "Edit" tool.
+#   # Automatically adds `strict: true`, `additionalProperties: false`, and ensures required params.
+#   # Fixes "lazy" edits from models like GPT-4o/O1.
+#   strict_tools: true
+#
+#   # Removes unsupported parameters (like `allowed_domains`) from "WebSearch" tool definitions.
+#   # Prevents 400 Bad Request errors from upstream providers that don't support these extensions.
+#   clean_web_search: true
+#
+#   # Enables robust JSON5 parsing for tool arguments in responses.
+#   # Fixes common LLM errors like trailing commas, single quotes, or unquoted keys.
+#   json_repair: true
+#
+#   # Merges multiple system messages into one (needed for some providers that strictly check schema)
+#   merge_system_messages: true
+#
+#   # Filters out tool calls with empty names and removes orphaned tool results
+#   sanitize_tool_history: true
+
 # System Prompt Patching (Revised)
 # --------------------------------------
 # Modify system prompts on the fly based on *system prompt content matching*.
@@ -194,6 +223,21 @@ models:
 # - Model name starting with "OVERRIDE-MODEL-<model_name>" forces usage of that model directly.
 
 profiles:
+  # Profile: Claude Code (Highly Reliable)
+  # optimized for coding agents requiring strict tool adherence and sequential execution.
+  claude_code:
+    enable_exit_tool: true
+    preprocess:
+      disable_parallel_tool_calls: true
+      strict_tools: true
+      clean_web_search: true
+      json_repair: true
+      sanitize_tool_history: true
+
+    rules:
+      - pattern: ".*"
+        target: "stepfun-flash" # Or any capable model
+
   # Profile: Stepfun Flash (Free) with GLM vision fallback
   stepfun:
     # tool_filters:

@@ -35,6 +35,8 @@ async fn test_preprocess_merge_sysmsgs() {
         }],
         tool_filters: None,
         system_prompts: None,
+        preprocess: None,
+        enable_exit_tool: None,
     });
     config.current_profile = "test".to_string();
     config.upstream.base_url = Some(mock_server.uri());
@@ -109,6 +111,8 @@ async fn test_preprocess_sanitize_tool_history() {
         }],
         tool_filters: None,
         system_prompts: None,
+        preprocess: None,
+        enable_exit_tool: None,
     });
     config.current_profile = "test".to_string();
     config.upstream.base_url = Some(mock_server.uri());
@@ -226,6 +230,8 @@ async fn test_max_output_cap() {
         }],
         tool_filters: None,
         system_prompts: None,
+        preprocess: None,
+        enable_exit_tool: None,
     });
     config.current_profile = "test".to_string();
     config.upstream.base_url = Some(mock_server.uri());
@@ -287,6 +293,8 @@ async fn test_max_tokens_override() {
         }],
         tool_filters: None,
         system_prompts: None,
+        preprocess: None,
+        enable_exit_tool: None,
     });
     config.current_profile = "test".to_string();
     config.upstream.base_url = Some(mock_server.uri());
@@ -351,6 +359,8 @@ async fn test_max_output_tokens_auto() {
         }],
         tool_filters: None,
         system_prompts: None,
+        preprocess: None,
+        enable_exit_tool: None,
     });
     config.current_profile = "test".to_string();
     config.upstream.base_url = Some(mock_server.uri());
@@ -416,6 +426,8 @@ async fn test_override_max_tokens_auto() {
         }],
         tool_filters: None,
         system_prompts: None,
+        preprocess: None,
+        enable_exit_tool: None,
     });
     config.current_profile = "test".to_string();
     config.upstream.base_url = Some(mock_server.uri());
@@ -477,6 +489,8 @@ async fn test_override_max_tokens_human_readable() {
         }],
         tool_filters: None,
         system_prompts: None,
+        preprocess: None,
+        enable_exit_tool: None,
     });
     config.current_profile = "test".to_string();
     config.upstream.base_url = Some(mock_server.uri());

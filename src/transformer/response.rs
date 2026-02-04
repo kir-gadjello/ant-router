@@ -1,3 +1,4 @@
+use crate::config::ModelConfig;
 use crate::protocol::*;
 use anyhow::Result;
 use async_stream::stream;
@@ -6,7 +7,7 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
-pub fn convert_response(resp: OpenAIChatCompletionResponse) -> Result<AnthropicMessageResponse> {
+pub fn convert_response(resp: OpenAIChatCompletionResponse, model_config: Option<&ModelConfig>) -> Result<AnthropicMessageResponse> {
     let choice = resp
         .choices
         .first()
@@ -49,14 +50,11 @@ pub fn convert_response(resp: OpenAIChatCompletionResponse) -> Result<AnthropicM
             }
             OpenAIContent::Array(parts) => {
                 for part in parts {
-                    match part {
-                        OpenAIContentPart::Text { text } => {
-                            content_blocks.push(AnthropicContentBlock::Text { text: text.clone() });
-                        }
-                        // Anthropic response doesn't usually include images back to user in this format,
-                        // usually just text/tool_use. If OpenAI echoes images, we might skip or try to map?
-                        // For now, only mapping text back.
-                        _ => {}
+                    // Anthropic response doesn't usually include images back to user in this format,
+                    // usually just text/tool_use. If OpenAI echoes images, we might skip or try to map?
+                    // For now, only mapping text back.
+                    if let OpenAIContentPart::Text { text } = part {
+                        content_blocks.push(AnthropicContentBlock::Text { text: text.clone() });
                     }
                 }
             }
@@ -65,8 +63,9 @@ pub fn convert_response(resp: OpenAIChatCompletionResponse) -> Result<AnthropicM
 
     // Tool calls
     if let Some(tool_calls) = &msg.tool_calls {
+        let json_repair = model_config.and_then(|c| c.preprocess.as_ref()).and_then(|p| p.json_repair).unwrap_or(false);
         for tc in tool_calls {
-            let input_val: Value = parse_tool_arguments(&tc.function.arguments);
+            let input_val: Value = parse_tool_arguments(&tc.function.arguments, json_repair);
 
             content_blocks.push(AnthropicContentBlock::ToolUse {
                 id: tc.id.clone(),
@@ -130,20 +129,20 @@ fn estimate_tokens(text: &str) -> u32 {
     text.split_whitespace().count() as u32
 }
 
-fn parse_tool_arguments(args: &str) -> Value {
+fn parse_tool_arguments(args: &str, use_repair: bool) -> Value {
     // 1. Try standard JSON parsing first (fast path)
     if let Ok(v) = serde_json::from_str(args) {
         return v;
     }
 
-    // 2. Try json5 parsing (handles trailing commas, unquoted keys, single quotes)
-    if let Ok(v) = json5::from_str(args) {
-        return v;
+    // 2. Try json5 parsing if enabled (handles trailing commas, unquoted keys, single quotes)
+    if use_repair {
+        if let Ok(v) = json5::from_str(args) {
+            return v;
+        }
     }
 
-    // 3. Fallback: Return empty object if parsing fails completely, to avoid panic
-    // Ideally we might want to return the raw string in some way, but Anthropic expects structured input.
-    // Logging the error is handled by the caller or implicitly by the empty input.
+    // 3. Fallback: Return empty object if parsing fails completely
     json!({})
 }
 
