@@ -72,7 +72,7 @@ models:
     # Force reasoning: ensures reasoning is enabled with a specific effort level.
     # Supported values: true (default low), false (none), "low", "medium", "high", or integer (token budget).
     force_reasoning: high
-    #override_max_tokens: auto
+    override_max_tokens: auto
 
     capabilities:
       reasoning: true
