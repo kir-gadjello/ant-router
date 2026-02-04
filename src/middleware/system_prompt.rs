@@ -28,14 +28,14 @@ impl Middleware for SystemPromptPatcherMiddleware {
             None => String::new(),
         };
 
-        if current_system.is_empty() {
-            return Ok(());
-        }
-
         // 2. Find matching rules
         for rule in &self.rules {
             let mut all_matched = true;
             for pattern in &rule.r#match {
+                if pattern == "ALL" {
+                    continue; // Matches everything
+                }
+
                 // Try as raw regex first (partial match allowed)
                 if let Ok(re) = regex::Regex::new(pattern) {
                     if !re.is_match(&current_system) {
@@ -56,10 +56,6 @@ impl Middleware for SystemPromptPatcherMiddleware {
             if all_matched {
                 // Apply Action
                 apply_action(req, &rule.action, &current_system);
-                // Assumption: Apply only first matching rule? Or all?
-                // "allow general per-systemprompt-name-based transforms"
-                // Usually first match or specific strategy. Let's assume sequential application might be chaotic.
-                // Stopping after first match is safer for replacements.
                 break;
             }
         }
@@ -74,19 +70,34 @@ fn apply_action(req: &mut AnthropicMessageRequest, action: &SystemPromptAction, 
             req.system = Some(SystemPrompt::String(new_content.clone()));
         },
         SystemPromptAction::Prepend(prefix) => {
-            let new_content = format!("{}\n\n{}", prefix, current_content);
+            let new_content = if current_content.is_empty() {
+                prefix.clone()
+            } else {
+                format!("{}\n\n{}", prefix, current_content)
+            };
             req.system = Some(SystemPrompt::String(new_content));
         },
         SystemPromptAction::Append(suffix) => {
-            let new_content = format!("{}\n\n{}", current_content, suffix);
+            let new_content = if current_content.is_empty() {
+                suffix.clone()
+            } else {
+                format!("{}\n\n{}", current_content, suffix)
+            };
             req.system = Some(SystemPrompt::String(new_content));
         },
         SystemPromptAction::MoveToUser(replacement) => {
+            // If current content is empty, there is nothing to move to user.
+            // But we might still want to set the replacement system prompt.
+
             // 1. Set system prompt to replacement (or empty)
             if let Some(r) = replacement {
                 req.system = Some(SystemPrompt::String(r.clone()));
             } else {
                 req.system = None;
+            }
+
+            if current_content.is_empty() {
+                return;
             }
 
             // 2. Prepend old content to first user message

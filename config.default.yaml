@@ -17,6 +17,8 @@
 server:
   host: "127.0.0.1"
   port: 3000
+  # ant_port: 3000        # Port for Anthropic-compatible frontend (defaults to `port`)
+  # openai_port: 3001     # Port for OpenAI-compatible frontend (optional)
 
 # ----------------------------------------------------------------------------------
 # Logging Configuration
@@ -42,6 +44,20 @@ upstream:
 # ----------------------------------------------------------------------------------
 # The active profile that defines how requests are routed to logical models.
 current_profile: "stepfun"
+
+# ----------------------------------------------------------------------------------
+# System Prompts (Middleware)
+# ----------------------------------------------------------------------------------
+# Apply transformations to system prompts globally.
+# Can be overridden per-profile.
+# match: regex string, list of strings, or "ALL" for catch-all default.
+# actions: Replace, Prepend, Append, move_to_user
+system_prompts:
+  # - name: "DEFAULT"
+  #   match: ALL
+  #   action:
+  #     type: "move_to_user"
+  #     # value: "Optional replacement system prompt"
 
 # ----------------------------------------------------------------------------------
 # Model Definitions (UMCP)
@@ -117,6 +133,11 @@ models:
 # - pattern: Regex/Glob to match input model ID.
 # - match_features: List of required features in request (vision, reasoning)
 # - target: Key in `models` map (Logical Model ID).
+# - system_prompts: Optional list of SystemPromptRule to override global rules.
+#
+# Request Overrides:
+# - Model name starting with "OVERRIDE-<profile_name>" forces usage of that profile.
+# - Model name starting with "OVERRIDE-MODEL-<model_name>" forces usage of that model directly.
 
 profiles:
   # Profile: Stepfun Flash (Free) with GLM vision fallback
