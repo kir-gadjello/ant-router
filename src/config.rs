@@ -13,7 +13,7 @@ use tracing::warn;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
-    #[serde(default)]
+    #[serde(default = "default_profile")]
     pub current_profile: String,
 
     #[serde(default)]
@@ -43,6 +43,10 @@ pub struct Config {
     pub system_prompts: Vec<SystemPromptRule>,
     #[serde(default = "default_true")]
     pub enable_exit_tool: bool,
+    #[serde(default)]
+    pub debug_tools: bool,
+    #[serde(default)]
+    pub trace_file: Option<String>,
 }
 
 fn default_log_enabled() -> bool {
@@ -51,6 +55,10 @@ fn default_log_enabled() -> bool {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_profile() -> String {
+    "default".to_string()
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -74,6 +82,10 @@ pub struct Profile {
     pub tool_filters: Option<ToolFilterConfig>,
     #[serde(default)]
     pub system_prompts: Option<Vec<SystemPromptRule>>,
+    #[serde(default)]
+    pub preprocess: Option<PreprocessConfig>,
+    #[serde(default)]
+    pub enable_exit_tool: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -138,6 +150,8 @@ pub enum SystemPromptOp {
         prefix: Option<String>,
         suffix: Option<String>,
     },
+    #[serde(rename = "delete")]
+    Delete,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -186,6 +200,9 @@ pub struct ModelConfig {
     pub override_max_tokens: Option<Value>,
 
     #[serde(default)]
+    pub r#override: Option<HashMap<String, Value>>,
+
+    #[serde(default)]
     pub preprocess: Option<PreprocessConfig>,
 
     #[serde(default)]
@@ -202,6 +219,14 @@ pub struct PreprocessConfig {
     pub max_output_tokens: Option<Value>,
     #[serde(default)]
     pub max_output_cap: Option<u32>,
+    #[serde(default)]
+    pub disable_parallel_tool_calls: Option<bool>,
+    #[serde(default)]
+    pub strict_tools: Option<bool>,
+    #[serde(default)]
+    pub clean_web_search: Option<bool>,
+    #[serde(default)]
+    pub json_repair: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
@@ -381,12 +406,25 @@ fn merge_models(parent: ModelConfig, child: ModelConfig) -> ModelConfig {
         force_reasoning: child.force_reasoning.or(parent.force_reasoning),
         max_tokens: child.max_tokens.or(parent.max_tokens),
         override_max_tokens: child.override_max_tokens.or(parent.override_max_tokens),
+        r#override: merge_overrides(parent.r#override, child.r#override),
         preprocess: merge_preprocess(parent.preprocess, child.preprocess),
         api_params: merge_api_params(parent.api_params, child.api_params),
     }
 }
 
-fn merge_preprocess(
+fn merge_overrides(
+    parent: Option<HashMap<String, Value>>,
+    child: Option<HashMap<String, Value>>,
+) -> Option<HashMap<String, Value>> {
+    match (parent, child) {
+        (None, None) => None,
+        (Some(p), None) => Some(p),
+        (None, Some(c)) => Some(c),
+        (Some(p), Some(c)) => Some(deep_merge_json(p, c)),
+    }
+}
+
+pub fn merge_preprocess(
     parent: Option<PreprocessConfig>,
     child: Option<PreprocessConfig>,
 ) -> Option<PreprocessConfig> {
@@ -399,6 +437,10 @@ fn merge_preprocess(
             sanitize_tool_history: c.sanitize_tool_history.or(p.sanitize_tool_history),
             max_output_tokens: c.max_output_tokens.or(p.max_output_tokens),
             max_output_cap: c.max_output_cap.or(p.max_output_cap),
+            disable_parallel_tool_calls: c.disable_parallel_tool_calls.or(p.disable_parallel_tool_calls),
+            strict_tools: c.strict_tools.or(p.strict_tools),
+            clean_web_search: c.clean_web_search.or(p.clean_web_search),
+            json_repair: c.json_repair.or(p.json_repair),
         }),
     }
 }
@@ -530,6 +572,8 @@ impl Default for Config {
             tool_filters: None,
             system_prompts: Vec::new(),
             enable_exit_tool: true,
+            debug_tools: false,
+            trace_file: None,
         }
     }
 }

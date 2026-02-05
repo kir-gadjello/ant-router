@@ -5,7 +5,7 @@ use anthropic_bridge::middleware::{
 };
 use anthropic_bridge::protocol::{
     AnthropicContentBlock, AnthropicMessageRequest, AnthropicMessageResponse, AnthropicTool,
-    AnthropicToolChoice, SystemPrompt,
+    AnthropicToolChoice, AnthropicToolDef, SystemPrompt,
 };
 use serde_json::json;
 
@@ -21,12 +21,13 @@ fn test_tool_enforcer_injects_exit_tool_and_forces_choice() {
         system: None,
         temperature: None,
         tool_choice: None,
-        tools: Some(vec![AnthropicTool {
+        tools: Some(vec![AnthropicTool::Anthropic(AnthropicToolDef {
             name: "test_tool".to_string(),
             description: None,
             input_schema: json!({"type": "object"}),
             input_examples: None,
-        }]),
+            strict: None,
+        })]),
         top_k: None,
         top_p: None,
         thinking: None,
@@ -37,7 +38,10 @@ fn test_tool_enforcer_injects_exit_tool_and_forces_choice() {
 
     // Verify ExitTool injection
     let tools = req.tools.as_ref().unwrap();
-    assert!(tools.iter().any(|t| t.name == "ExitTool"));
+    assert!(tools.iter().any(|t| match t {
+        AnthropicTool::Anthropic(t) => t.name == "ExitTool",
+        AnthropicTool::OpenAI(t) => t.function.name == "ExitTool",
+    }));
 
     // Verify forced tool choice
     match req.tool_choice {
@@ -87,24 +91,27 @@ fn test_tool_filter_middleware() {
         temperature: None,
         tool_choice: None,
         tools: Some(vec![
-            AnthropicTool {
+            AnthropicTool::Anthropic(AnthropicToolDef {
                 name: "allowed_tool".to_string(),
                 description: None,
                 input_schema: json!({}),
                 input_examples: None,
-            },
-            AnthropicTool {
+                strict: None,
+            }),
+            AnthropicTool::Anthropic(AnthropicToolDef {
                 name: "denied_tool".to_string(),
                 description: None,
                 input_schema: json!({}),
                 input_examples: None,
-            },
-            AnthropicTool {
+                strict: None,
+            }),
+            AnthropicTool::Anthropic(AnthropicToolDef {
                 name: "other_tool".to_string(),
                 description: None,
                 input_schema: json!({}),
                 input_examples: None,
-            },
+                strict: None,
+            }),
         ]),
         top_k: None,
         top_p: None,
@@ -120,9 +127,13 @@ fn test_tool_filter_middleware() {
     middleware.on_request(&mut req).unwrap();
 
     let tools = req.tools.unwrap();
-    assert!(tools.iter().any(|t| t.name == "allowed_tool"));
-    assert!(tools.iter().any(|t| t.name == "other_tool"));
-    assert!(!tools.iter().any(|t| t.name == "denied_tool"));
+    let get_name = |t: &AnthropicTool| match t {
+        AnthropicTool::Anthropic(t) => t.name.clone(),
+        AnthropicTool::OpenAI(t) => t.function.name.clone(),
+    };
+    assert!(tools.iter().any(|t| get_name(t) == "allowed_tool"));
+    assert!(tools.iter().any(|t| get_name(t) == "other_tool"));
+    assert!(!tools.iter().any(|t| get_name(t) == "denied_tool"));
 }
 
 #[test]

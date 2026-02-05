@@ -97,13 +97,22 @@ pub enum AnthropicContentBlock {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AnthropicTool {
+#[serde(untagged)]
+pub enum AnthropicTool {
+    Anthropic(AnthropicToolDef),
+    OpenAI(OpenAITool),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnthropicToolDef {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub input_schema: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_examples: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strict: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -227,6 +236,8 @@ pub struct OpenAIChatCompletionRequest {
     pub user: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -279,6 +290,8 @@ pub struct OpenAIFunction {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub parameters: Value, // JSON Schema
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strict: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

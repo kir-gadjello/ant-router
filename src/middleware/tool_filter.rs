@@ -1,6 +1,6 @@
 use super::Middleware;
 use crate::config::{ToolFilterConfig, glob_to_regex};
-use crate::protocol::AnthropicMessageRequest;
+use crate::protocol::{AnthropicMessageRequest, AnthropicTool};
 use anyhow::Result;
 use regex::Regex;
 
@@ -19,7 +19,10 @@ impl Middleware for ToolFilterMiddleware {
         if let Some(config) = &self.config {
             if let Some(tools) = &mut req.tools {
                 tools.retain(|tool| {
-                    let name = &tool.name;
+                    let name = match tool {
+                        AnthropicTool::Anthropic(t) => &t.name,
+                        AnthropicTool::OpenAI(t) => &t.function.name,
+                    };
 
                     // Deny logic
                     if let Some(deny_list) = &config.deny {

@@ -3,6 +3,7 @@ use crate::protocol::*;
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::collections::HashSet;
+use tracing::info;
 
 #[derive(Debug, Default, Clone)]
 pub struct PreprocessReport {
@@ -14,6 +15,7 @@ pub fn convert_request(
     mut req: AnthropicMessageRequest,
     resolved_model: String,
     model_config: Option<&ModelConfig>,
+    debug_tools: bool,
 ) -> Result<(OpenAIChatCompletionRequest, PreprocessReport)> {
     let mut report = PreprocessReport::default();
 
@@ -254,22 +256,74 @@ pub fn convert_request(
     let mut openai_tools = None;
     if let Some(tools) = req.tools {
         let mut converted_tools = Vec::new();
-        for tool in tools {
-            if tool.name == "BatchTool" {
-                continue;
+        for tool_enum in tools {
+            if debug_tools {
+                 info!("[TOOL_DEBUG] Input Tool Definition: {}", serde_json::to_string(&tool_enum).unwrap_or_default());
             }
 
-            let mut schema = tool.input_schema;
-            remove_uri_format(&mut schema);
+            match tool_enum {
+                AnthropicTool::Anthropic(tool) => {
+                    if tool.name == "BatchTool" {
+                        continue;
+                    }
 
-            converted_tools.push(OpenAITool {
-                r#type: "function".to_string(),
-                function: OpenAIFunction {
-                    name: tool.name,
-                    description: tool.description,
-                    parameters: schema,
-                },
-            });
+                    let mut schema = tool.input_schema;
+                    let mut strict = tool.strict;
+                    remove_uri_format(&mut schema);
+
+                    // --- Preprocess: Strict Tools (Edit) ---
+                    if let Some(pp) = model_config.and_then(|c| c.preprocess.as_ref()) {
+                        if pp.strict_tools == Some(true) && tool.name == "Edit" {
+                            strict = Some(true);
+                            // Enforce required fields for Edit tool
+                            if let Some(props) = schema.as_object_mut() {
+                                // Ensure additionalProperties: false
+                                props.insert("additionalProperties".to_string(), json!(false));
+
+                                // Ensure required fields
+                                let required_fields = vec![
+                                    "file_path", "old_string", "new_string", "replace_all"
+                                ];
+                                props.insert("required".to_string(), json!(required_fields));
+                            }
+                        }
+                    }
+
+                    // --- Preprocess: WebSearch Cleanup ---
+                    if let Some(pp) = model_config.and_then(|c| c.preprocess.as_ref()) {
+                        if pp.clean_web_search == Some(true) && tool.name == "WebSearch" {
+                            if let Some(props) = schema.get_mut("properties").and_then(|p| p.as_object_mut()) {
+                                props.remove("allowed_domains");
+                                props.remove("blocked_domains");
+                            }
+                        }
+                    }
+
+                    let openai_tool = OpenAITool {
+                        r#type: "function".to_string(),
+                        function: OpenAIFunction {
+                            name: tool.name,
+                            description: tool.description,
+                            parameters: schema,
+                            strict,
+                        },
+                    };
+
+                    if debug_tools {
+                        info!("[TOOL_DEBUG] Converted Tool Definition: {}", serde_json::to_string(&openai_tool).unwrap_or_default());
+                    }
+
+                    converted_tools.push(openai_tool);
+                }
+                AnthropicTool::OpenAI(mut tool) => {
+                    // Pass through OpenAI tools, but still clean up schema if needed
+                    remove_uri_format(&mut tool.function.parameters);
+                    if debug_tools {
+                        info!("[TOOL_DEBUG] Converted Tool Definition (Pass-through): {}", serde_json::to_string(&tool).unwrap_or_default());
+                    }
+                    converted_tools.push(tool);
+                }
+            }
         }
         if !converted_tools.is_empty() {
             openai_tools = Some(converted_tools);
@@ -330,7 +384,17 @@ pub fn convert_request(
         }
     }
 
-    Ok((OpenAIChatCompletionRequest {
+    let parallel_tool_calls = if let Some(pp) = model_config.and_then(|c| c.preprocess.as_ref()) {
+        if pp.disable_parallel_tool_calls == Some(true) {
+            Some(false)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let mut initial_req = OpenAIChatCompletionRequest {
         model: resolved_model,
         messages: openai_messages,
         temperature: req.temperature,
@@ -344,7 +408,21 @@ pub fn convert_request(
         frequency_penalty: None,
         user: None,
         reasoning,
-    }, report))
+        parallel_tool_calls,
+    };
+
+    // Apply Overrides
+    if let Some(overrides) = model_config.and_then(|c| c.r#override.as_ref()) {
+        let mut req_val = serde_json::to_value(&initial_req)?;
+        if let Some(req_obj) = req_val.as_object_mut() {
+            for (k, v) in overrides {
+                req_obj.insert(k.clone(), v.clone());
+            }
+        }
+        initial_req = serde_json::from_value(req_val)?;
+    }
+
+    Ok((initial_req, report))
 }
 
 fn preprocess_messages(req: &mut AnthropicMessageRequest, config: &PreprocessConfig) -> PreprocessReport {
@@ -367,6 +445,7 @@ fn preprocess_messages(req: &mut AnthropicMessageRequest, config: &PreprocessCon
     // 2. Sanitize Tool History
     if config.sanitize_tool_history == Some(true) {
         let mut removed_tool_ids = HashSet::new();
+        let mut valid_tool_ids = HashSet::new();
 
         // Pass 1: Identify invalid tool uses in Assistant messages
         for msg in &mut req.messages {
@@ -380,6 +459,7 @@ fn preprocess_messages(req: &mut AnthropicMessageRequest, config: &PreprocessCon
                                 return false; // Remove
                             } else {
                                 report.passed_tool_ids.push(id.clone());
+                                valid_tool_ids.insert(id.clone());
                             }
                         }
                         true // Keep
@@ -389,28 +469,31 @@ fn preprocess_messages(req: &mut AnthropicMessageRequest, config: &PreprocessCon
         }
 
         // Pass 2: Remove orphaned Tool Results
-        if !removed_tool_ids.is_empty() {
-            for msg in &mut req.messages {
-                if let AnthropicMessageContent::Blocks(blocks) = &mut msg.content {
-                    blocks.retain(|block| {
-                        if let AnthropicContentBlock::ToolResult { tool_use_id, .. } = block {
-                            if removed_tool_ids.contains(tool_use_id) {
-                                return false;
-                            }
+        // Remove if corresponding tool_use was removed OR if tool_use is missing from history
+        for msg in &mut req.messages {
+            if let AnthropicMessageContent::Blocks(blocks) = &mut msg.content {
+                blocks.retain(|block| {
+                    if let AnthropicContentBlock::ToolResult { tool_use_id, .. } = block {
+                        if removed_tool_ids.contains(tool_use_id) {
+                            return false;
                         }
-                        true
-                    });
-                }
+                        if !valid_tool_ids.contains(tool_use_id) {
+                            // Also remove if tool_use_id is not in valid_tool_ids (orphaned)
+                            return false;
+                        }
+                    }
+                    true
+                });
             }
-            
-            // Remove empty messages resulting from filtering
-            req.messages.retain(|msg| {
-                match &msg.content {
-                    AnthropicMessageContent::Blocks(blocks) => !blocks.is_empty(),
-                    AnthropicMessageContent::String(s) => !s.is_empty(),
-                }
-            });
         }
+
+        // Remove empty messages resulting from filtering
+        req.messages.retain(|msg| {
+            match &msg.content {
+                AnthropicMessageContent::Blocks(blocks) => !blocks.is_empty(),
+                AnthropicMessageContent::String(s) => !s.is_empty(),
+            }
+        });
     }
     
     report
@@ -421,18 +504,28 @@ fn normalize_content_to_string(content: AnthropicMessageContent) -> Option<Strin
     match content {
         AnthropicMessageContent::String(s) => Some(s),
         AnthropicMessageContent::Blocks(blocks) => {
-            let texts: Vec<String> = blocks
-                .iter()
-                .filter_map(|b| match b {
-                    AnthropicContentBlock::Text { text } => Some(text.clone()),
-                    _ => None, // Tool results usually don't have images
-                })
-                .collect();
+            // Check for complex content (like images)
+            let has_complex = blocks.iter().any(|b| !matches!(b, AnthropicContentBlock::Text { .. }));
 
-            if texts.is_empty() {
-                None
+            if has_complex {
+                // If we have complex content (e.g. images), serialize the whole thing to JSON
+                // so the upstream model at least gets the structured data
+                serde_json::to_string(&blocks).ok()
             } else {
-                Some(texts.join(" "))
+                // Text-only content: join with spaces
+                let texts: Vec<String> = blocks
+                    .iter()
+                    .filter_map(|b| match b {
+                        AnthropicContentBlock::Text { text } => Some(text.clone()),
+                        _ => None,
+                    })
+                    .collect();
+
+                if texts.is_empty() {
+                    None
+                } else {
+                    Some(texts.join(" "))
+                }
             }
         }
     }

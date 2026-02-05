@@ -1,12 +1,14 @@
+use crate::config::ModelConfig;
 use crate::protocol::*;
 use anyhow::Result;
 use async_stream::stream;
 use futures::{Stream, StreamExt};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
+use tracing::info;
 use uuid::Uuid;
 
-pub fn convert_response(resp: OpenAIChatCompletionResponse) -> Result<AnthropicMessageResponse> {
+pub fn convert_response(resp: OpenAIChatCompletionResponse, model_config: Option<&ModelConfig>, debug_tools: bool) -> Result<AnthropicMessageResponse> {
     let choice = resp
         .choices
         .first()
@@ -49,14 +51,11 @@ pub fn convert_response(resp: OpenAIChatCompletionResponse) -> Result<AnthropicM
             }
             OpenAIContent::Array(parts) => {
                 for part in parts {
-                    match part {
-                        OpenAIContentPart::Text { text } => {
-                            content_blocks.push(AnthropicContentBlock::Text { text: text.clone() });
-                        }
-                        // Anthropic response doesn't usually include images back to user in this format,
-                        // usually just text/tool_use. If OpenAI echoes images, we might skip or try to map?
-                        // For now, only mapping text back.
-                        _ => {}
+                    // Anthropic response doesn't usually include images back to user in this format,
+                    // usually just text/tool_use. If OpenAI echoes images, we might skip or try to map?
+                    // For now, only mapping text back.
+                    if let OpenAIContentPart::Text { text } = part {
+                        content_blocks.push(AnthropicContentBlock::Text { text: text.clone() });
                     }
                 }
             }
@@ -65,9 +64,17 @@ pub fn convert_response(resp: OpenAIChatCompletionResponse) -> Result<AnthropicM
 
     // Tool calls
     if let Some(tool_calls) = &msg.tool_calls {
+        let json_repair = model_config.and_then(|c| c.preprocess.as_ref()).and_then(|p| p.json_repair).unwrap_or(false);
         for tc in tool_calls {
-            let input_val: Value =
-                serde_json::from_str(&tc.function.arguments).unwrap_or(json!({}));
+            if debug_tools {
+                 info!("[TOOL_DEBUG] Upstream Tool Call: ID={} Name={} Args={}", tc.id, tc.function.name, tc.function.arguments);
+            }
+
+            let input_val: Value = parse_tool_arguments(&tc.function.arguments, json_repair);
+
+            if debug_tools {
+                 info!("[TOOL_DEBUG] Converted Tool Call Input: {}", serde_json::to_string(&input_val).unwrap_or_default());
+            }
 
             content_blocks.push(AnthropicContentBlock::ToolUse {
                 id: tc.id.clone(),
@@ -129,6 +136,23 @@ fn estimate_tokens_content(content: &Option<OpenAIContent>) -> u32 {
 
 fn estimate_tokens(text: &str) -> u32 {
     text.split_whitespace().count() as u32
+}
+
+fn parse_tool_arguments(args: &str, use_repair: bool) -> Value {
+    // 1. Try standard JSON parsing first (fast path)
+    if let Ok(v) = serde_json::from_str(args) {
+        return v;
+    }
+
+    // 2. Try json5 parsing if enabled (handles trailing commas, unquoted keys, single quotes)
+    if use_repair {
+        if let Ok(v) = json5::from_str(args) {
+            return v;
+        }
+    }
+
+    // 3. Fallback: Return empty object if parsing fails completely
+    json!({})
 }
 
 pub fn record_stream<S, F>(
@@ -237,7 +261,7 @@ struct StreamState {
     model: String,
 }
 
-pub fn convert_stream<S>(input_stream: S) -> impl Stream<Item = Result<AnthropicStreamEvent>>
+pub fn convert_stream<S>(input_stream: S, debug_tools: bool) -> impl Stream<Item = Result<AnthropicStreamEvent>>
 where
     S: Stream<Item = Result<OpenAIChatCompletionChunk, anyhow::Error>>,
 {
@@ -253,6 +277,8 @@ where
         };
 
         let mut first_chunk = true;
+        // Buffer to track tool args for debugging
+        let mut debug_tool_buffers: HashMap<u32, String> = HashMap::new();
 
         while let Some(chunk_result) = input_stream.next().await {
             match chunk_result {
@@ -383,12 +409,18 @@ where
                                     state.tool_index_map.insert(tc.index, state.block_index);
 
                                     state.open_block_indices.insert(state.block_index);
+                                    let name = tc.function.as_ref().and_then(|f| f.name.clone()).unwrap_or_default();
+
+                                    if debug_tools {
+                                        info!("[TOOL_DEBUG] Stream Start Tool Call: ID={} Name={}", id, name);
+                                        debug_tool_buffers.insert(tc.index, String::new());
+                                    }
 
                                     yield Ok(AnthropicStreamEvent::ContentBlockStart {
                                         index: state.block_index,
                                         content_block: AnthropicContentBlock::ToolUse {
                                             id: id.clone(),
-                                            name: tc.function.as_ref().and_then(|f| f.name.clone()).unwrap_or_default(),
+                                            name,
                                             input: json!({}), // Empty object as placeholder
                                         },
                                     });
@@ -400,6 +432,12 @@ where
                                 // If it has arguments, send delta to the mapped block index
                                 if let Some(func) = &tc.function {
                                     if let Some(args) = &func.arguments {
+                                        if debug_tools {
+                                            if let Some(buf) = debug_tool_buffers.get_mut(&tc.index) {
+                                                buf.push_str(args);
+                                            }
+                                        }
+
                                         if let Some(anthropic_idx) = state.tool_index_map.get(&tc.index) {
                                             yield Ok(AnthropicStreamEvent::ContentBlockDelta {
                                                 index: *anthropic_idx,
@@ -417,6 +455,18 @@ where
                         if let Some(finish) = &choice.finish_reason {
                             // Close any open blocks
                             for idx in state.open_block_indices.drain() {
+                                if debug_tools {
+                                    // Find which openai index mapped to this anthropic idx to log the buffer?
+                                    // Map is forward only.
+                                    // Iterating map is fine.
+                                    for (oa_idx, ant_idx) in &state.tool_index_map {
+                                        if *ant_idx == idx {
+                                            if let Some(buf) = debug_tool_buffers.get(oa_idx) {
+                                                 info!("[TOOL_DEBUG] Stream Complete Tool Call Args (OpenAI Index {}): {}", oa_idx, buf);
+                                            }
+                                        }
+                                    }
+                                }
                                 yield Ok(AnthropicStreamEvent::ContentBlockStop { index: idx });
                             }
 

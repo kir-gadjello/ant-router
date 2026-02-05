@@ -32,6 +32,7 @@ async fn test_e2e_chat_compat() {
         api_key: Some("test-key".to_string()),
         verbose: true,
         tool_verbose: false,
+        debug_tools: false,
         record: false,
         tools_reported: AtomicBool::new(false),
     });
@@ -114,6 +115,7 @@ async fn test_e2e_tool_compat() {
         api_key: Some("test-key".to_string()),
         verbose: true,
         tool_verbose: false,
+        debug_tools: false,
         record: false,
         tools_reported: AtomicBool::new(false),
     });
@@ -207,6 +209,7 @@ async fn test_min_reasoning_injection() {
         api_key: Some("test-key".to_string()),
         verbose: true,
         tool_verbose: false,
+        debug_tools: false,
         record: false,
         tools_reported: AtomicBool::new(false),
     });

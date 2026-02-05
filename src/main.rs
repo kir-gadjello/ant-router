@@ -1,4 +1,4 @@
-use anthropic_bridge::{config::Config, create_router, create_openai_router, handlers::AppState};
+use anthropic_bridge::{config::Config, create_router, create_openai_router, handlers::AppState, logging::set_trace_file};
 use anyhow::{Context, Result};
 use std::env;
 use std::fs;
@@ -124,6 +124,11 @@ async fn main() -> Result<()> {
     info!("Loading config from {}", config_path);
     let mut config = Config::load(&config_path).await?;
 
+    if let Some(trace_path) = &config.trace_file {
+        info!("Tracing enabled to file: {}", trace_path);
+        set_trace_file(std::path::PathBuf::from(trace_path));
+    }
+
     // Override profile from CLI or environment (Precedence: CLI > Env > Config)
     if let Some(profile) = cli_profile {
         info!("Overriding profile from CLI: {}", profile);
@@ -215,6 +220,8 @@ async fn main() -> Result<()> {
         .read_timeout(Duration::from_secs(300))
         .build()?;
 
+    let debug_tools = config.debug_tools;
+
     let state = Arc::new(AppState {
         config,
         client,
@@ -222,6 +229,7 @@ async fn main() -> Result<()> {
         api_key,
         verbose,
         tool_verbose,
+        debug_tools,
         record,
         tools_reported: AtomicBool::new(false),
     });

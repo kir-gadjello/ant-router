@@ -35,6 +35,8 @@ async fn test_preprocess_merge_sysmsgs() {
         }],
         tool_filters: None,
         system_prompts: None,
+        preprocess: None,
+        enable_exit_tool: None,
     });
     config.current_profile = "test".to_string();
     config.upstream.base_url = Some(mock_server.uri());
@@ -46,6 +48,7 @@ async fn test_preprocess_merge_sysmsgs() {
         api_key: Some("k".to_string()),
         verbose: true,
         tool_verbose: false,
+        debug_tools: false,
         record: false,
         tools_reported: AtomicBool::new(false),
     });
@@ -109,6 +112,8 @@ async fn test_preprocess_sanitize_tool_history() {
         }],
         tool_filters: None,
         system_prompts: None,
+        preprocess: None,
+        enable_exit_tool: None,
     });
     config.current_profile = "test".to_string();
     config.upstream.base_url = Some(mock_server.uri());
@@ -120,6 +125,7 @@ async fn test_preprocess_sanitize_tool_history() {
         api_key: Some("k".to_string()),
         verbose: true,
         tool_verbose: false,
+        debug_tools: false,
         record: false,
         tools_reported: AtomicBool::new(false),
     });
@@ -226,6 +232,8 @@ async fn test_max_output_cap() {
         }],
         tool_filters: None,
         system_prompts: None,
+        preprocess: None,
+        enable_exit_tool: None,
     });
     config.current_profile = "test".to_string();
     config.upstream.base_url = Some(mock_server.uri());
@@ -237,6 +245,7 @@ async fn test_max_output_cap() {
         api_key: Some("k".to_string()),
         verbose: true,
         tool_verbose: false,
+        debug_tools: false,
         record: false,
         tools_reported: AtomicBool::new(false),
     });
@@ -287,6 +296,8 @@ async fn test_max_tokens_override() {
         }],
         tool_filters: None,
         system_prompts: None,
+        preprocess: None,
+        enable_exit_tool: None,
     });
     config.current_profile = "test".to_string();
     config.upstream.base_url = Some(mock_server.uri());
@@ -298,6 +309,7 @@ async fn test_max_tokens_override() {
         api_key: Some("k".to_string()),
         verbose: true,
         tool_verbose: false,
+        debug_tools: false,
         record: false,
         tools_reported: AtomicBool::new(false),
     });
@@ -351,6 +363,8 @@ async fn test_max_output_tokens_auto() {
         }],
         tool_filters: None,
         system_prompts: None,
+        preprocess: None,
+        enable_exit_tool: None,
     });
     config.current_profile = "test".to_string();
     config.upstream.base_url = Some(mock_server.uri());
@@ -362,6 +376,7 @@ async fn test_max_output_tokens_auto() {
         api_key: Some("k".to_string()),
         verbose: true,
         tool_verbose: false,
+        debug_tools: false,
         record: false,
         tools_reported: AtomicBool::new(false),
     });
@@ -416,6 +431,8 @@ async fn test_override_max_tokens_auto() {
         }],
         tool_filters: None,
         system_prompts: None,
+        preprocess: None,
+        enable_exit_tool: None,
     });
     config.current_profile = "test".to_string();
     config.upstream.base_url = Some(mock_server.uri());
@@ -427,6 +444,7 @@ async fn test_override_max_tokens_auto() {
         api_key: Some("k".to_string()),
         verbose: true,
         tool_verbose: false,
+        debug_tools: false,
         record: false,
         tools_reported: AtomicBool::new(false),
     });
@@ -477,6 +495,8 @@ async fn test_override_max_tokens_human_readable() {
         }],
         tool_filters: None,
         system_prompts: None,
+        preprocess: None,
+        enable_exit_tool: None,
     });
     config.current_profile = "test".to_string();
     config.upstream.base_url = Some(mock_server.uri());
@@ -488,6 +508,7 @@ async fn test_override_max_tokens_human_readable() {
         api_key: Some("k".to_string()),
         verbose: true,
         tool_verbose: false,
+        debug_tools: false,
         record: false,
         tools_reported: AtomicBool::new(false),
     });

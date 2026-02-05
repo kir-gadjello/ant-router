@@ -10,6 +10,7 @@ current_profile: "test_profile"
 
 profiles:
   test_profile:
+    enable_exit_tool: false
     rules:
       - pattern: "stepfun-flash"
         target: "stepfun-flash"
